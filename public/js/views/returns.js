@@ -165,7 +165,9 @@ export async function viewReturn(el, params, ctx) {
             ? `<div class="scan-status ok"><div class="big-line">✓ ${esc(res.product.title)} : ACCEPTE</div>
                 ${res.incremented ? 'Quantite incrementee.' : ''} Derniere vente : ${res.date_last_sale ? fdate(res.date_last_sale) : '—'}</div>`
             : `<div class="scan-status ko"><div class="big-line">✗ ${esc(res.product.title)} : REFUSE</div>
-                Motif propose : ${esc(REFUSE_REASONS[res.refuse_reason] || res.refuse_reason)} — corrigez la ligne si besoin.</div>`;
+                Motif propose : ${esc(REFUSE_REASONS[res.refuse_reason] || res.refuse_reason)}
+                ${res.refuse_reason === 'quota-depasse' ? ` — achete ${num(res.purchased_qty)}, deja retourne ${num(res.already_accepted_qty)}` : ''}
+                 — corrigez la ligne si besoin.</div>`;
         } catch (err) {
           statusHtml = `<div class="scan-status ko"><div class="big-line">✗ Erreur</div>${esc(err.message)}</div>`;
         }

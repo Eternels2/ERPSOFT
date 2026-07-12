@@ -127,7 +127,10 @@ export const RETURN_MODES = [
   { value: 'representant', label: 'Representant' },
   { value: 'a-dispo', label: 'A dispo (sans frais)' }
 ];
-export const REFUSE_REASONS = { 'hors-delai': 'Hors delai', 'non-achete': 'Non achete chez nous', autre: 'Autre motif' };
+export const REFUSE_REASONS = {
+  'hors-delai': 'Hors delai', 'non-achete': 'Non achete chez nous',
+  'quota-depasse': 'Quantite deja retournee (au-dela de l\'achete)', autre: 'Autre motif'
+};
 export const FORMATS = [
   { value: '', label: '—' }, { value: 'broche', label: 'Broche' }, { value: 'poche', label: 'Poche' },
   { value: 'relie', label: 'Relie' }, { value: 'beau-livre', label: 'Beau livre' }

@@ -2,10 +2,10 @@
 /* Retours clients : scan des livres, acceptation/refus, frais selon le mode, avoir + stock retour. */
 const { db, tx, nextRef, getSetting } = require('../lib/db');
 const { route, ApiError } = require('../lib/web');
-const { round2, createInvoice, stockMove, findByIsbn, lastSaleDate } = require('../lib/services');
+const { round2, createInvoice, stockMove, findByIsbn, lastSaleDate, purchasedQty, acceptedReturnQty } = require('../lib/services');
 
 const RETURN_MODES = ['dpd', 'gradignan', 'representant', 'a-dispo'];
-const REFUSE_REASONS = ['hors-delai', 'non-achete', 'autre'];
+const REFUSE_REASONS = ['hors-delai', 'non-achete', 'quota-depasse', 'autre'];
 
 function computeFees(mode, nbColis, acceptedHt) {
   if (mode === 'dpd') return round2(Number(getSetting('fee_dpd', '12.50')) * Math.max(1, nbColis));
@@ -93,6 +93,14 @@ route('POST', '/api/returns/:id/scan', async (ctx) => {
     if (limit < new Date()) { status = 0; reason = 'hors-delai'; }
   }
 
+  // Plafond : on ne peut pas accepter plus que ce que le client a achete au total
+  // (toutes factures confondues), deduction faite de ce qui est deja accepte en
+  // retour ailleurs (ce retour ou un retour precedent, finalise ou non).
+  const purchased = purchasedQty(r.fk_client, p.id);
+  const alreadyAccepted = acceptedReturnQty(r.fk_client, p.id);
+  const remaining = purchased - alreadyAccepted;
+  if (status === 1 && remaining <= 0) { status = 0; reason = 'quota-depasse'; }
+
   // Meme livre deja scanne avec le meme statut -> on incremente la quantite.
   const existing = db.prepare(`SELECT * FROM return_lines WHERE fk_return = ? AND fk_product = ? AND line_status = ?
     AND COALESCE(refuse_reason,'') = COALESCE(?,'')`).get(r.id, p.id, status, reason);
@@ -108,7 +116,8 @@ route('POST', '/api/returns/:id/scan', async (ctx) => {
   return {
     ok: true, incremented,
     product: { id: p.id, title: p.title, isbn: p.isbn },
-    line_status: status, refuse_reason: reason, date_last_sale: lastSale
+    line_status: status, refuse_reason: reason, date_last_sale: lastSale,
+    purchased_qty: purchased, already_accepted_qty: alreadyAccepted
   };
 });
 
@@ -126,6 +135,18 @@ route('PUT', '/api/returns/:id/lines/:lineId', async (ctx) => {
   else if (!REFUSE_REASONS.includes(reason)) reason = 'autre';
   const qty = b.qty !== undefined ? Number(b.qty) : l.qty;
   if (qty <= 0) throw new ApiError(400, 'La quantite doit etre superieure a zero');
+  // Meme plafond que sur le scan : impossible d'accepter (ou d'augmenter une ligne
+  // acceptee) au-dela de ce que le client a reellement achete, toutes factures confondues.
+  if (status === 1) {
+    const purchased = purchasedQty(r.fk_client, l.fk_product);
+    const acceptedElsewhere = acceptedReturnQty(r.fk_client, l.fk_product, l.id);
+    if (acceptedElsewhere + qty > purchased) {
+      const remaining = Math.max(0, purchased - acceptedElsewhere);
+      throw new ApiError(400,
+        `Quantite refusee : le client a achete ${purchased} exemplaire(s) de ce livre (toutes factures confondues) `
+        + `et en a deja ${acceptedElsewhere} accepte(s) en retour ailleurs. Maximum acceptable ici : ${remaining}.`);
+    }
+  }
   db.prepare('UPDATE return_lines SET line_status = ?, refuse_reason = ?, qty = ?, price_ht = ? WHERE id = ?')
     .run(status, reason, qty, b.price_ht !== undefined ? Number(b.price_ht) : l.price_ht, l.id);
   return { ok: true };
