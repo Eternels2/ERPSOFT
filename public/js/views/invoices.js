@@ -1,6 +1,46 @@
-import { GET } from '../api.js';
-import { esc, eur, fdate, icon, dataTable } from '../ui.js';
+import { GET, POST } from '../api.js';
+import { esc, eur, fdate, icon, toast, toastErr, modal, readForm, field, select, dataTable } from '../ui.js';
 import { paymentModal } from './accounting.js';
+
+/* Facture recapitulative : selection des commandes expediees non facturees d'un client. */
+async function recapModal(onSaved) {
+  const clients = await GET('/api/thirdparties?type=client');
+  if (!clients.length) return toast('Aucun client.', 'error');
+  const opts = clients.map((c) => ({ value: c.id, label: `${c.name} (${c.code})` }));
+  const { overlay, close } = modal({
+    title: 'Facture recapitulative',
+    wide: true,
+    body: `${field('Client', select('fk_client', opts, opts[0].value))}
+      <div id="rc-orders" style="margin-top:14px"></div>`,
+    footer: `<button class="btn" data-act="c">Annuler</button>
+      <button class="btn primary" data-act="s">${icon('invoice', 14)} Generer la facture</button>`
+  });
+  const q = (sel) => overlay.querySelector(sel);
+  const load = async () => {
+    const orders = await GET('/api/invoices/recapable?client=' + q('[name=fk_client]').value);
+    q('#rc-orders').innerHTML = orders.length ? `<table class="table">
+      <thead><tr><th></th><th>Commande</th><th>Expediee le</th><th class="num">Total HT</th></tr></thead>
+      <tbody>${orders.map((o) => `<tr>
+        <td style="width:30px"><input type="checkbox" data-oid="${o.id}" checked></td>
+        <td class="main-cell">${esc(o.ref)}</td>
+        <td>${fdate(o.date_shipped)}</td>
+        <td class="num">${eur(o.total_ht)}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="empty" style="padding:16px">Aucune commande expediee non facturee pour ce client</div>';
+  };
+  q('[name=fk_client]').addEventListener('change', load);
+  q('[data-act=c]').onclick = close;
+  q('[data-act=s]').onclick = async () => {
+    const ids = [...overlay.querySelectorAll('[data-oid]:checked')].map((c) => Number(c.dataset.oid));
+    if (!ids.length) return toast('Selectionnez au moins une commande.', 'error');
+    try {
+      const r = await POST('/api/invoices/recap', { fk_client: Number(q('[name=fk_client]').value), order_ids: ids });
+      toast(`Facture recapitulative ${r.invoice.ref} generee (${eur(r.invoice.total_ttc)} TTC).`);
+      close();
+      onSaved();
+    } catch (e) { toastErr(e); }
+  };
+  await load();
+}
 
 const sourceLink = (i) => {
   if (i.source_type === 'commande') return `#/orders/${i.source_id}`;
@@ -58,10 +98,12 @@ export async function viewInvoices(el) {
       <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-2)">
         <input type="checkbox" id="iunpaid"> Restant du uniquement</label>
       <div class="spacer"></div>
+      <button class="btn" id="irecap">${icon('invoice', 14)} Facture recapitulative</button>
       <a class="btn" href="#/compta/reglements">${icon('euro', 14)} Reglements</a>
     </div>
     <div class="card-body flush" id="ilist"></div>
   </div>`;
+  el.querySelector('#irecap').addEventListener('click', () => recapModal(render));
 
   let t;
   el.querySelector('#isearch').addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { q = e.target.value; render(); }, 250); });

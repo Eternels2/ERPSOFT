@@ -59,18 +59,26 @@ function findGisement(code) {
   return g;
 }
 
-/* Rangement : reception de livres dans un gisement -> entree stock principal + emplacement. */
+/*
+ * Rangement : placement d'exemplaires deja en stock principal (recus via une reception)
+ * dans un gisement. Ne cree pas de stock : la quantite placee est bornee par les
+ * exemplaires "non places" (stock principal - somme des gisements).
+ */
 route('POST', '/api/warehouse/rangement', async (ctx) => {
   const { gisement_code, isbn, qty } = ctx.body;
   const g = findGisement(gisement_code);
   const p = findByIsbn(isbn);
   if (!p) throw new ApiError(404, `Livre introuvable pour l'ISBN "${isbn}"`);
   const n = Math.max(1, Number(qty) || 1);
-  tx(() => {
-    stockMove(p.id, 'main', n, 'Rangement gisement ' + g.code, g.code, ctx.session.user.id);
-    gisementMove(p.id, g.id, n);
-  });
-  return { ok: true, product: { id: p.id, title: p.title, isbn: p.isbn }, gisement: g.code, qty: n };
+  const placed = db.prepare('SELECT COALESCE(SUM(qty),0) AS s FROM product_gisement WHERE product_id = ?').get(p.id).s;
+  const unplaced = p.stock_main - placed;
+  if (unplaced < n) {
+    throw new ApiError(400, unplaced <= 0
+      ? `${p.title} : aucun exemplaire a placer. Receptionnez d'abord la marchandise (Achats > Receptions).`
+      : `${p.title} : seulement ${unplaced} exemplaire(s) non place(s) a ranger.`);
+  }
+  gisementMove(p.id, g.id, n);
+  return { ok: true, product: { id: p.id, title: p.title, isbn: p.isbn }, gisement: g.code, qty: n, unplaced: unplaced - n };
 });
 
 /* Transfert entre gisements (le stock principal ne bouge pas). */

@@ -27,6 +27,7 @@ async function productFormModal(existing, onSaved) {
       ${field('Prix de vente HT (€)', input('price_ht', p.price_ht ?? '', 'type="number" step="0.01" min="0" required'))}
       ${field("Prix d'achat HT (€)", input('buy_price_ht', p.buy_price_ht ?? '', 'type="number" step="0.01" min="0"'))}
       ${field('TVA (%)', input('tva_rate', p.tva_rate ?? 5.5, 'type="number" step="0.1" min="0"'))}
+      ${field('Stock mini (reassort)', input('stock_min', p.stock_min ?? 0, 'type="number" min="0" title="0 = pas de suggestion de reassort"'))}
       ${field('Notes', `<textarea class="input" name="notes" rows="2">${esc(p.notes || '')}</textarea>`, 'wide')}
     </div>`,
     footer: `<button class="btn" data-act="cancel">Annuler</button>
@@ -111,6 +112,7 @@ export async function viewProduct(el, params, ctx) {
             <div class="item"><b>Prix vente HT</b>${eur(p.price_ht)}</div>
             <div class="item"><b>Prix achat HT</b>${eur(p.buy_price_ht)}</div>
             <div class="item"><b>TVA</b>${p.tva_rate} %</div>
+            <div class="item"><b>Stock mini</b>${p.stock_min || '—'}</div>
           </div>
           ${p.notes ? `<p style="color:var(--text-2);margin-bottom:0"><b>Notes :</b> ${esc(p.notes)}</p>` : ''}
         </div>

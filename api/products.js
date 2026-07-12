@@ -49,12 +49,12 @@ route('POST', '/api/products', async (ctx) => {
   const { isbn, title } = validateBody(b);
   if (findByIsbn(isbn)) throw new ApiError(400, 'Un livre avec cet ISBN existe deja');
   const r = db.prepare(`INSERT INTO products (isbn, title, author, publisher, collection, format, pages, date_parution,
-      remise_editeur, fk_supplier, price_ht, buy_price_ht, tva_rate, notes)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      remise_editeur, fk_supplier, price_ht, buy_price_ht, tva_rate, notes, stock_min)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(isbn, title, b.author || null, b.publisher || null, b.collection || null, b.format || null,
       b.pages ? Number(b.pages) : null, b.date_parution || null, Number(b.remise_editeur) || 0,
       b.fk_supplier ? Number(b.fk_supplier) : null, Number(b.price_ht) || 0, Number(b.buy_price_ht) || 0,
-      b.tva_rate !== undefined ? Number(b.tva_rate) : 5.5, b.notes || null);
+      b.tva_rate !== undefined ? Number(b.tva_rate) : 5.5, b.notes || null, Number(b.stock_min) || 0);
   return { id: Number(r.lastInsertRowid) };
 });
 
@@ -67,7 +67,7 @@ route('PUT', '/api/products/:id', async (ctx) => {
   const dup = findByIsbn(isbn);
   if (dup && dup.id !== id) throw new ApiError(400, 'Un autre livre porte deja cet ISBN');
   db.prepare(`UPDATE products SET isbn=?, title=?, author=?, publisher=?, collection=?, format=?, pages=?, date_parution=?,
-      remise_editeur=?, fk_supplier=?, price_ht=?, buy_price_ht=?, tva_rate=?, notes=? WHERE id=?`)
+      remise_editeur=?, fk_supplier=?, price_ht=?, buy_price_ht=?, tva_rate=?, notes=?, stock_min=? WHERE id=?`)
     .run(isbn, title, b.author ?? p.author, b.publisher ?? p.publisher, b.collection ?? p.collection,
       b.format ?? p.format, b.pages !== undefined ? (b.pages ? Number(b.pages) : null) : p.pages,
       b.date_parution ?? p.date_parution,
@@ -76,7 +76,8 @@ route('PUT', '/api/products/:id', async (ctx) => {
       b.price_ht !== undefined ? Number(b.price_ht) : p.price_ht,
       b.buy_price_ht !== undefined ? Number(b.buy_price_ht) : p.buy_price_ht,
       b.tva_rate !== undefined ? Number(b.tva_rate) : p.tva_rate,
-      b.notes ?? p.notes, id);
+      b.notes ?? p.notes,
+      b.stock_min !== undefined ? Number(b.stock_min) || 0 : p.stock_min, id);
   return { ok: true };
 });
 

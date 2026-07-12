@@ -43,13 +43,33 @@ npm run reset
 - **Factures & avoirs** : numerotation automatique (FA/AV+AAMM-NNNN), impression / export PDF,
   suivi des reglements.
 
+### Achats & receptions
+- **Commandes fournisseurs** (CF) : bons de commande par editeur/diffuseur, imprimables,
+  statut brouillon → envoyee → partiellement recue → recue.
+- **Receptions scannees** (RC) : contre commande (controle commande / deja recu / ecart,
+  detection des livres hors commande) ou directes (offices) ; validation = entree en
+  Stock Principal + mise a jour du prix d'achat.
+- **Reassort** : seuil de stock mini par livre → suggestions groupees par fournisseur
+  (deduction des commandes en cours) → creation de la commande pre-remplie en un clic.
+
 ### Entrepot
-- **Gisements** (emplacements) : le code du gisement sert de code-barres.
+- **Gisements** (emplacements) : le code du gisement sert de code-barres ;
+  **etiquettes code-barres** (Code 39) imprimables en planche.
 - **File de preparation** triee par priorite, avec avancement.
 - **Picking scanne** : scan ISBN + gisement, decompte du stock et de l'emplacement,
-  cloture automatique quand tout est prepare, gestion des reliquats.
-- **Rangement** (reception) : scan gisement puis ISBN → entree en stock principal + emplacement.
+  cloture automatique quand tout est prepare.
+- **Rangement** : placement des exemplaires recus dans leur gisement (borne par le
+  non-place ; l'entree de stock se fait a la reception).
 - **Transfert** entre gisements et **reintegration** stock retour → stock principal.
+- **Inventaires** par gisement : comptage scanne, ecarts theorique/compte, ajout des
+  non-comptes a zero, validation avec ajustements traces.
+
+### Expedition
+- **Bons de livraison** (BL) numerotes et imprimables : transporteur, n° de suivi,
+  nombre de colis, poids.
+- **Reliquats** : les quantites commandees non servies generent une commande reliquat
+  qui repart automatiquement en file de preparation.
+- **Facture recapitulative** : regroupement de plusieurs BL d'un client en une facture.
 
 ### Retours clients
 - Scan des livres avec **controle automatique** : achete chez nous ? delai de retour respecte
@@ -81,9 +101,20 @@ npm run reset
 - Catalogue avec disponibilite, panier et passage de commande (entre directement en file de
   preparation), suivi des commandes ligne a ligne, factures et avoirs imprimables.
 
+### ADV
+- **Remise par defaut par client** appliquee automatiquement aux lignes de commande
+  (interne et portail).
+- **Plafond d'encours TTC par client** : validation de commande bloquee au-dela
+  (factures impayees + commandes en cours).
+- **Delai de paiement propre au client** (echeance des factures), SIRET.
+
 ### Administration
-- Utilisateurs et roles (admin / commercial / entrepot), parametres societe (en-tete des
-  documents), frais de retour, TVA.
+- Utilisateurs et **roles appliques cote serveur** : entrepot = logistique uniquement
+  (pas de comptabilite, factures, ni modification des tiers) ; commercial = tout sauf
+  utilisateurs ; admin = tout.
+- **Sauvegardes automatiques** : copie coherente de la base (VACUUM INTO) au demarrage
+  puis toutes les 24 h dans `backups/`, 14 dernieres conservees.
+- Parametres societe (en-tete des documents), frais de retour, TVA, plan comptable.
 
 ## Architecture
 

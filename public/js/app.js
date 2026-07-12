@@ -13,6 +13,8 @@ import { viewContainers, viewContainer } from './views/containers.js';
 import { viewInvoices } from './views/invoices.js';
 import { viewAccounting } from './views/accounting.js';
 import { viewSettings } from './views/settings.js';
+import { viewPurchaseOrders, viewPurchaseOrder, viewReceptions, viewReception, viewRestock } from './views/purchases.js';
+import { viewInventories, viewInventory, viewShipments } from './views/inventory.js';
 
 const app = document.getElementById('app');
 let currentUser = null;
@@ -38,6 +40,14 @@ const routes = [
   { path: 'invoices', view: viewInvoices, title: 'Factures & avoirs' },
   { path: 'compta', view: viewAccounting, title: 'Comptabilite' },
   { path: 'compta/:tab', view: viewAccounting, title: 'Comptabilite' },
+  { path: 'achats', view: viewPurchaseOrders, title: 'Commandes fournisseurs' },
+  { path: 'achats/:id', view: viewPurchaseOrder, title: 'Commande fournisseur' },
+  { path: 'receptions', view: viewReceptions, title: 'Receptions' },
+  { path: 'receptions/:id', view: viewReception, title: 'Reception' },
+  { path: 'reassort', view: viewRestock, title: 'Reassort' },
+  { path: 'expeditions', view: viewShipments, title: 'Expeditions' },
+  { path: 'inventaires', view: viewInventories, title: 'Inventaires' },
+  { path: 'inventaires/:id', view: viewInventory, title: 'Inventaire' },
   { path: 'gisements', view: viewGisements, title: 'Gisements' },
   { path: 'gisements/:id', view: viewGisement, title: 'Gisement' },
   { path: 'rangement', view: viewRangement, title: 'Rangement' },
@@ -66,20 +76,27 @@ function matchHash() {
 export const navigate = (path) => { location.hash = '#/' + path; };
 
 /* ------------------------------------------------------------- menu */
+/* roles : si absent, visible pour tous. */
 const NAV = [
   { section: 'Pilotage' },
   { path: 'dashboard', icon: 'dashboard', label: 'Tableau de bord' },
   { section: 'Commercial' },
   { path: 'orders', icon: 'cart', label: 'Commandes' },
   { path: 'consignments', icon: 'store', label: 'Depots-vente' },
-  { path: 'invoices', icon: 'invoice', label: 'Factures & avoirs' },
-  { section: 'Comptabilite' },
-  { path: 'compta', icon: 'euro', label: 'Comptabilite' },
+  { path: 'expeditions', icon: 'truck', label: 'Expeditions' },
+  { path: 'invoices', icon: 'invoice', label: 'Factures & avoirs', roles: ['admin', 'commercial'] },
+  { section: 'Comptabilite', roles: ['admin', 'commercial'] },
+  { path: 'compta', icon: 'euro', label: 'Comptabilite', roles: ['admin', 'commercial'] },
+  { section: 'Achats' },
+  { path: 'achats', icon: 'cart', label: 'Commandes fournisseurs' },
+  { path: 'receptions', icon: 'box', label: 'Receptions' },
+  { path: 'reassort', icon: 'warehouse', label: 'Reassort' },
   { section: 'Entrepot' },
   { path: 'queue', icon: 'queue', label: 'File de preparation', countKey: 'queue' },
   { path: 'rangement', icon: 'scan', label: 'Rangement' },
   { path: 'gisements', icon: 'location', label: 'Gisements' },
   { path: 'transfert', icon: 'warehouse', label: 'Transfert gisement' },
+  { path: 'inventaires', icon: 'check', label: 'Inventaires' },
   { section: 'Retours' },
   { path: 'returns', icon: 'returns', label: 'Retours clients', countKey: 'returns' },
   { path: 'containers', icon: 'box', label: 'Conteneurs fournisseurs' },
@@ -88,8 +105,8 @@ const NAV = [
   { path: 'products', icon: 'book', label: 'Catalogue' },
   { path: 'clients', icon: 'users', label: 'Clients' },
   { path: 'fournisseurs', icon: 'truck', label: 'Fournisseurs' },
-  { section: 'Administration' },
-  { path: 'settings', icon: 'settings', label: 'Parametres' }
+  { section: 'Administration', roles: ['admin'] },
+  { path: 'settings', icon: 'settings', label: 'Parametres', roles: ['admin'] }
 ];
 
 let counts = { queue: 0, returns: 0 };
@@ -113,7 +130,7 @@ function shell() {
         <svg viewBox="0 0 24 24" width="28" height="28"><rect width="24" height="24" rx="5" fill="#4caf7d"/><path d="M6 6h5v12H6zM13 6h5v8h-5z" fill="#0f1c14"/></svg>
         <span>ERPSOFT<small>Grossiste Livres</small></span>
       </div>
-      <nav id="nav">${NAV.map((n) => n.section
+      <nav id="nav">${NAV.filter((n) => !n.roles || n.roles.includes(currentUser.role)).map((n) => n.section
         ? `<div class="nav-section">${esc(n.section)}</div>`
         : `<a class="nav-item" data-path="${n.path}" href="#/${n.path}">${icon(n.icon)}<span>${esc(n.label)}</span>
             ${n.countKey ? `<span class="count" data-count="${n.countKey}" style="display:none">0</span>` : ''}</a>`).join('')}

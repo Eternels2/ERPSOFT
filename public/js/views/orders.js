@@ -143,6 +143,9 @@ export async function viewOrder(el, params, ctx) {
           ${o.status === 2 ? `<a class="btn primary" href="#/picking/${o.id}">${icon('scan', 14)} Reprendre le picking</a>` : ''}
           ${o.status === 3 ? `<button class="btn primary" id="oship">${icon('truck', 14)} Expedier</button>` : ''}
           ${(o.status === 3 || o.status === 4) && !o.fk_invoice ? `<button class="btn primary" id="oinvoice">${icon('invoice', 14)} Facturer</button>` : ''}
+          ${o.status >= 3 && o.qty_picked < o.qty_total && !o.fk_backorder ? `<button class="btn" id="obackorder">${icon('queue', 14)} Generer le reliquat</button>` : ''}
+          ${o.backorder_ref ? `<a class="btn" href="#/orders/${o.fk_backorder}">${icon('queue', 14)} Reliquat ${esc(o.backorder_ref)}</a>` : ''}
+          ${(o.shipments || []).map((s) => `<a class="btn" href="/print/shipment/${s.id}" target="_blank">${icon('truck', 14)} ${esc(s.ref)}</a>`).join('')}
           ${o.fk_invoice ? `<a class="btn" href="/print/invoice/${o.fk_invoice}" target="_blank">${icon('invoice', 14)} ${esc(o.invoice_ref)}</a>` : ''}
           ${o.status >= 0 && o.status < 4 ? `<button class="btn danger" id="ocancel">Annuler</button>` : ''}
           ${isDraft || o.status === -1 ? `<button class="btn danger" id="odelete">${icon('trash', 14)}</button>` : ''}
@@ -192,9 +195,37 @@ export async function viewOrder(el, params, ctx) {
       try { await POST(`/api/orders/${o.id}/start-picking`); ctx.navigate('picking/' + o.id); }
       catch (e) { toastErr(e); }
     });
-    on('#oship', async () => {
-      try { await POST(`/api/orders/${o.id}/ship`); toast('Commande expediee.'); render(); }
-      catch (e) { toastErr(e); }
+    on('#oship', () => {
+      const { overlay, close } = modal({
+        title: `Expedier ${o.ref} — bon de livraison`,
+        body: `<div class="form-grid">
+          ${field('Transporteur', input('carrier', '', 'placeholder="DPD, Colissimo, par nos soins…"'))}
+          ${field('N° de suivi', input('tracking', ''))}
+          ${field('Nombre de colis', input('nb_colis', 1, 'type="number" min="1"'))}
+          ${field('Poids (kg)', input('weight_kg', '', 'type="number" step="0.1" min="0"'))}
+          ${field('Note', input('note', ''), 'wide')}
+        </div>`,
+        footer: `<button class="btn" data-act="c">Annuler</button>
+          <button class="btn primary" data-act="s">${icon('truck', 14)} Expedier et generer le BL</button>`
+      });
+      overlay.querySelector('[data-act=c]').onclick = close;
+      overlay.querySelector('[data-act=s]').onclick = async () => {
+        try {
+          const r = await POST(`/api/orders/${o.id}/ship`, readForm(overlay));
+          toast(`Commande expediee — bon de livraison ${r.shipment.ref} genere.`);
+          close();
+          window.open('/print/shipment/' + r.shipment.id, '_blank');
+          render();
+        } catch (e) { toastErr(e); }
+      };
+    });
+    on('#obackorder', async () => {
+      if (!await confirmDialog(`Generer une commande reliquat pour les ${o.qty_total - o.qty_picked} exemplaire(s) non servi(s) ? Elle entrera directement en file de preparation.`)) return;
+      try {
+        const r = await POST(`/api/orders/${o.id}/backorder`);
+        toast(`Reliquat ${r.backorder.ref} genere et mis en file.`);
+        render();
+      } catch (e) { toastErr(e); }
     });
     on('#oinvoice', async () => {
       if (!await confirmDialog('Generer la facture pour les quantites preparees ?')) return;

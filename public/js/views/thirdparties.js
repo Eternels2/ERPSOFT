@@ -16,6 +16,10 @@ function tierFormModal(type, existing, onSaved) {
       ${field('Email', input('email', t.email || '', 'type="email"'))}
       ${field('Telephone', input('phone', t.phone || ''))}
       ${field('Delai de retour (mois)', input('delai_retour_mois', t.delai_retour_mois ?? 12, 'type="number" min="0"'))}
+      ${field('SIRET', input('siret', t.siret || ''))}
+      ${isClient ? field('Remise par defaut (%)', input('discount_pct', t.discount_pct ?? 0, 'type="number" step="0.1" min="0" max="100"')) : ''}
+      ${isClient ? field('Plafond d\'encours TTC (0 = aucun)', input('credit_limit', t.credit_limit ?? 0, 'type="number" step="0.01" min="0"')) : ''}
+      ${isClient ? field('Delai de paiement (jours, vide = global)', input('payment_terms_days', t.payment_terms_days ?? '', 'type="number" min="0"')) : ''}
       ${field('Adresse', input('address', t.address || ''), 'wide')}
       ${field('Code postal', input('zip', t.zip || ''))}
       ${field('Ville', input('town', t.town || ''))}
@@ -108,6 +112,10 @@ export async function viewThirdparty(el, params, ctx) {
             <div class="item"><b>Telephone</b>${esc(t.phone || '—')}</div>
             <div class="item"><b>Adresse</b>${esc(t.address || '—')}<br>${esc(t.zip || '')} ${esc(t.town || '')}</div>
             ${isClient ? `<div class="item"><b>Delai de retour</b>${t.delai_retour_mois ?? 12} mois</div>` : ''}
+            ${t.siret ? `<div class="item"><b>SIRET</b>${esc(t.siret)}</div>` : ''}
+            ${isClient && t.discount_pct ? `<div class="item"><b>Remise par defaut</b>${t.discount_pct} %</div>` : ''}
+            ${isClient && t.credit_limit ? `<div class="item"><b>Plafond d'encours</b>${eur(t.credit_limit)}</div>` : ''}
+            ${isClient && t.payment_terms_days ? `<div class="item"><b>Delai de paiement</b>${t.payment_terms_days} jours</div>` : ''}
             ${t.portal_login ? `<div class="item"><b>Identifiant portail</b>${esc(t.portal_login)}</div>` : ''}
           </div>
           ${t.notes ? `<p style="color:var(--text-2);margin-bottom:0"><b>Notes :</b> ${esc(t.notes)}</p>` : ''}

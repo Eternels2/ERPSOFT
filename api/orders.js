@@ -25,6 +25,11 @@ function getOrder(id) {
        WHERE pg.product_id = l.fk_product AND pg.qty > 0) AS locations
     FROM order_lines l JOIN products p ON p.id = l.fk_product
     WHERE l.fk_order = ? ORDER BY l.position, l.id`).all(Number(id));
+  o.shipments = db.prepare('SELECT id, ref, carrier, tracking, nb_colis, date_shipment FROM shipments WHERE fk_order = ? ORDER BY id').all(o.id);
+  if (o.fk_backorder) {
+    const bo = db.prepare('SELECT ref FROM orders WHERE id = ?').get(o.fk_backorder);
+    o.backorder_ref = bo ? bo.ref : null;
+  }
   Object.assign(o, orderTotals(o.id));
   return o;
 }
@@ -98,16 +103,38 @@ route('POST', '/api/orders/:id/lines', async (ctx) => {
   if (!product) throw new ApiError(404, 'Livre introuvable');
   const qty = Math.max(1, Number(b.qty) || 1);
   const price = b.price_ht !== undefined && b.price_ht !== '' ? Number(b.price_ht) : product.price_ht;
+  // Remise par defaut du client si aucune remise explicite
+  let discount = Number(b.discount_pct);
+  if (b.discount_pct === undefined || b.discount_pct === '') {
+    const client = db.prepare('SELECT discount_pct FROM thirdparties WHERE id = ?').get(o.fk_client);
+    discount = (client && client.discount_pct) || 0;
+  }
   const existing = db.prepare('SELECT * FROM order_lines WHERE fk_order = ? AND fk_product = ?').get(o.id, product.id);
   if (existing) {
     db.prepare('UPDATE order_lines SET qty = qty + ? WHERE id = ?').run(qty, existing.id);
   } else {
     const pos = db.prepare('SELECT COALESCE(MAX(position),0)+1 AS p FROM order_lines WHERE fk_order = ?').get(o.id).p;
     db.prepare('INSERT INTO order_lines (fk_order, fk_product, qty, price_ht, discount_pct, position) VALUES (?,?,?,?,?,?)')
-      .run(o.id, product.id, qty, price, Number(b.discount_pct) || 0, pos);
+      .run(o.id, product.id, qty, price, discount || 0, pos);
   }
   return { ok: true };
 });
+
+/* Plafond d'encours : encours facture (restant du TTC) + commandes en cours non facturees. */
+function checkCreditLimit(clientId, addedHt) {
+  const client = db.prepare('SELECT * FROM thirdparties WHERE id = ?').get(clientId);
+  if (!client || !client.credit_limit || client.credit_limit <= 0) return;
+  const unpaid = db.prepare(`SELECT COALESCE(SUM(i.total_ttc - (SELECT COALESCE(SUM(amount),0) FROM payment_allocations WHERE fk_invoice = i.id)),0) AS s
+    FROM invoices i WHERE i.fk_client = ? AND i.type='facture' AND i.status >= 1`).get(clientId).s;
+  const openOrders = db.prepare(`SELECT COALESCE(SUM(l.qty * l.price_ht * (1 - l.discount_pct/100.0)),0) AS s
+    FROM order_lines l JOIN orders o ON o.id = l.fk_order
+    WHERE o.fk_client = ? AND o.status BETWEEN 1 AND 4 AND o.fk_invoice IS NULL`).get(clientId).s;
+  const exposure = round2(unpaid + (openOrders + addedHt) * 1.055);
+  if (exposure > client.credit_limit) {
+    throw new ApiError(400,
+      `Plafond d'encours depasse pour ${client.name} : exposition ${exposure.toFixed(2)} € TTC (plafond ${client.credit_limit.toFixed(2)} €). Reglez des factures ou ajustez le plafond.`);
+  }
+}
 
 route('PUT', '/api/orders/:id/lines/:lineId', async (ctx) => {
   const o = requireDraft(ctx.params.id);
@@ -132,6 +159,8 @@ route('POST', '/api/orders/:id/validate', async (ctx) => {
   const o = requireDraft(ctx.params.id);
   const n = db.prepare('SELECT COUNT(*) AS n FROM order_lines WHERE fk_order = ?').get(o.id).n;
   if (!n) throw new ApiError(400, 'La commande ne contient aucune ligne');
+  const t = orderTotals(o.id);
+  checkCreditLimit(o.fk_client, t.total_ht);
   db.prepare('UPDATE orders SET status = 1 WHERE id = ?').run(o.id);
   return { ok: true };
 });
@@ -190,12 +219,59 @@ route('POST', '/api/orders/:id/close-picking', async (ctx) => {
   return { ok: true };
 });
 
+/* Expedition : cree le bon de livraison (transporteur, suivi, colisage) et passe la commande en expediee. */
 route('POST', '/api/orders/:id/ship', async (ctx) => {
   const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(Number(ctx.params.id));
   if (!o) throw new ApiError(404, 'Commande introuvable');
   if (o.status !== 3) throw new ApiError(400, 'Seule une commande preparee peut etre expediee');
-  db.prepare("UPDATE orders SET status = 4, date_shipped = date('now') WHERE id = ?").run(o.id);
-  return { ok: true };
+  const b = ctx.body;
+  const shipment = tx(() => {
+    const ref = nextRef('BL');
+    const r = db.prepare(`INSERT INTO shipments (ref, fk_order, fk_client, carrier, tracking, nb_colis, weight_kg, note, fk_user_creat)
+      VALUES (?,?,?,?,?,?,?,?,?)`)
+      .run(ref, o.id, o.fk_client, b.carrier || null, b.tracking || null,
+        Math.max(1, Number(b.nb_colis) || 1), b.weight_kg ? Number(b.weight_kg) : null, b.note || null, ctx.session.user.id);
+    db.prepare("UPDATE orders SET status = 4, date_shipped = date('now') WHERE id = ?").run(o.id);
+    return { id: Number(r.lastInsertRowid), ref };
+  });
+  return { ok: true, shipment };
+});
+
+route('GET', '/api/shipments', async (ctx) => {
+  const { q } = ctx.query;
+  let sql = `SELECT sh.*, o.ref AS order_ref, c.name AS client_name,
+      (SELECT COALESCE(SUM(qty_picked),0) FROM order_lines WHERE fk_order = sh.fk_order) AS qty_shipped
+    FROM shipments sh JOIN orders o ON o.id = sh.fk_order
+    JOIN thirdparties c ON c.id = sh.fk_client WHERE 1=1`;
+  const args = [];
+  if (q) { sql += ' AND (sh.ref LIKE ? OR o.ref LIKE ? OR c.name LIKE ? OR sh.tracking LIKE ?)'; args.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`); }
+  sql += ' ORDER BY sh.id DESC LIMIT 300';
+  return db.prepare(sql).all(...args);
+});
+
+/*
+ * Reliquat : genere une nouvelle commande (en file) avec les quantites commandees
+ * mais non preparees. Une seule commande reliquat par commande d'origine.
+ */
+route('POST', '/api/orders/:id/backorder', async (ctx) => {
+  const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(Number(ctx.params.id));
+  if (!o) throw new ApiError(404, 'Commande introuvable');
+  if (o.status < 3) throw new ApiError(400, 'La preparation doit etre terminee pour generer un reliquat');
+  if (o.fk_backorder) throw new ApiError(400, 'Un reliquat a deja ete genere pour cette commande');
+  const lines = db.prepare('SELECT * FROM order_lines WHERE fk_order = ? AND qty > qty_picked').all(o.id);
+  if (!lines.length) throw new ApiError(400, 'Aucune quantite manquante : la commande a ete servie en totalite');
+  const created = tx(() => {
+    const ref = nextRef('CO');
+    const r = db.prepare(`INSERT INTO orders (ref, fk_client, order_type, priority, status, source, note, fk_user_creat)
+      VALUES (?,?,?,?,1,?,?,?)`)
+      .run(ref, o.fk_client, o.order_type, o.priority, o.source, 'Reliquat de ' + o.ref, ctx.session.user.id);
+    const boId = Number(r.lastInsertRowid);
+    const ins = db.prepare('INSERT INTO order_lines (fk_order, fk_product, qty, price_ht, discount_pct, position) VALUES (?,?,?,?,?,?)');
+    lines.forEach((l, i) => ins.run(boId, l.fk_product, l.qty - l.qty_picked, l.price_ht, l.discount_pct, i + 1));
+    db.prepare('UPDATE orders SET fk_backorder = ? WHERE id = ?').run(boId, o.id);
+    return { id: boId, ref };
+  });
+  return { ok: true, backorder: created };
 });
 
 /* Facturation : quantites reellement preparees (ou commandees si preparation non passee par le picking). */
@@ -244,4 +320,4 @@ route('DELETE', '/api/orders/:id', async (ctx) => {
   return { ok: true };
 });
 
-module.exports = { getOrder };
+module.exports = { getOrder, checkCreditLimit };

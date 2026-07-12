@@ -69,10 +69,12 @@ route('POST', '/api/thirdparties', async (ctx) => {
   if (!b.name) throw new ApiError(400, 'Le nom est obligatoire');
   const type = b.type === 'fournisseur' ? 'fournisseur' : 'client';
   const code = b.code || nextCode(type);
-  const r = db.prepare(`INSERT INTO thirdparties (code, name, type, contact_name, email, phone, address, zip, town, country, delai_retour_mois, notes)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+  const r = db.prepare(`INSERT INTO thirdparties (code, name, type, contact_name, email, phone, address, zip, town, country, delai_retour_mois, notes, siret, discount_pct, credit_limit, payment_terms_days)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(code, b.name, type, b.contact_name || null, b.email || null, b.phone || null, b.address || null,
-      b.zip || null, b.town || null, b.country || 'France', Number(b.delai_retour_mois) || 12, b.notes || null);
+      b.zip || null, b.town || null, b.country || 'France', Number(b.delai_retour_mois) || 12, b.notes || null,
+      b.siret || null, Number(b.discount_pct) || 0, Number(b.credit_limit) || 0,
+      b.payment_terms_days ? Number(b.payment_terms_days) : null);
   return { id: Number(r.lastInsertRowid), code };
 });
 
@@ -81,10 +83,15 @@ route('PUT', '/api/thirdparties/:id', async (ctx) => {
   const t = db.prepare('SELECT * FROM thirdparties WHERE id = ?').get(id);
   if (!t) throw new ApiError(404, 'Tiers introuvable');
   const b = ctx.body;
-  db.prepare(`UPDATE thirdparties SET name=?, contact_name=?, email=?, phone=?, address=?, zip=?, town=?, country=?, delai_retour_mois=?, notes=? WHERE id=?`)
+  db.prepare(`UPDATE thirdparties SET name=?, contact_name=?, email=?, phone=?, address=?, zip=?, town=?, country=?, delai_retour_mois=?, notes=?, siret=?, discount_pct=?, credit_limit=?, payment_terms_days=? WHERE id=?`)
     .run(b.name ?? t.name, b.contact_name ?? t.contact_name, b.email ?? t.email, b.phone ?? t.phone,
       b.address ?? t.address, b.zip ?? t.zip, b.town ?? t.town, b.country ?? t.country,
-      b.delai_retour_mois !== undefined ? Number(b.delai_retour_mois) : t.delai_retour_mois, b.notes ?? t.notes, id);
+      b.delai_retour_mois !== undefined ? Number(b.delai_retour_mois) : t.delai_retour_mois, b.notes ?? t.notes,
+      b.siret ?? t.siret,
+      b.discount_pct !== undefined ? Number(b.discount_pct) || 0 : t.discount_pct,
+      b.credit_limit !== undefined ? Number(b.credit_limit) || 0 : t.credit_limit,
+      b.payment_terms_days !== undefined ? (b.payment_terms_days ? Number(b.payment_terms_days) : null) : t.payment_terms_days,
+      id);
   return { ok: true };
 });
 

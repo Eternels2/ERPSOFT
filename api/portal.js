@@ -42,22 +42,28 @@ route('POST', '/portal/api/orders', async (ctx) => {
   const { lines, note } = ctx.body;
   if (!Array.isArray(lines) || !lines.length) throw new ApiError(400, 'Aucune quantite saisie');
   const clientId = ctx.session.client.id;
+  const client = db.prepare('SELECT discount_pct FROM thirdparties WHERE id = ?').get(clientId);
+  const discount = (client && client.discount_pct) || 0;
   const order = tx(() => {
     const ref = nextRef('CO');
     const r = db.prepare(`INSERT INTO orders (ref, fk_client, order_type, priority, status, source, note)
       VALUES (?,?,'livraison',5,1,'portail',?)`).run(ref, clientId, note || null);
     const orderId = Number(r.lastInsertRowid);
-    const ins = db.prepare('INSERT INTO order_lines (fk_order, fk_product, qty, price_ht, position) VALUES (?,?,?,?,?)');
-    let pos = 0, any = false;
+    const ins = db.prepare('INSERT INTO order_lines (fk_order, fk_product, qty, price_ht, discount_pct, position) VALUES (?,?,?,?,?,?)');
+    let pos = 0, any = false, totalHt = 0;
     for (const l of lines) {
       const qty = Math.floor(Number(l.qty));
       if (!qty || qty <= 0) continue;
       const p = db.prepare('SELECT * FROM products WHERE id = ? AND active = 1').get(Number(l.product_id));
       if (!p) throw new ApiError(400, 'Produit invalide dans la commande');
-      ins.run(orderId, p.id, qty, p.price_ht, ++pos);
+      ins.run(orderId, p.id, qty, p.price_ht, discount, ++pos);
+      totalHt += qty * p.price_ht * (1 - discount / 100);
       any = true;
     }
     if (!any) throw new ApiError(400, 'Aucune quantite saisie');
+    // Plafond d'encours : la commande vient d'etre inseree en statut 1, deja comptee dans l'exposition
+    const { checkCreditLimit } = require('./orders');
+    checkCreditLimit(clientId, 0);
     return { id: orderId, ref };
   });
   return { ok: true, order };

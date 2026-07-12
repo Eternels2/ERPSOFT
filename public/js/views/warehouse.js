@@ -165,6 +165,7 @@ export async function viewGisements(el, params, ctx) {
     <div class="card-head">
       <div class="searchbar" style="width:280px">${icon('search')}<input class="input" id="gsearch" placeholder="Code…"></div>
       <div class="spacer"></div>
+      <a class="btn" href="/print/labels/gisements" target="_blank">${icon('print', 14)} Etiquettes code-barres</a>
       <button class="btn primary" id="gnew">${icon('plus', 15)} Nouveau gisement</button>
     </div>
     <div class="card-body flush" id="glist"></div>
@@ -258,8 +259,8 @@ function scanScreen(el, { title, help, fields, submitLabel, onSubmit, keepFields
 
 export async function viewRangement(el) {
   scanScreen(el, {
-    title: 'Rangement (reception en gisement)',
-    help: 'Scannez le <b>code du gisement</b> puis l\'<b>ISBN</b> de chaque livre a ranger. Chaque validation ajoute la quantite au stock principal et a l\'emplacement.',
+    title: 'Rangement (placement en gisement)',
+    help: 'Scannez le <b>code du gisement</b> puis l\'<b>ISBN</b> de chaque livre a placer. Le rangement place des exemplaires deja recus (stock principal) dans leur emplacement — l\'entree de stock se fait via <a href="#/receptions">Achats &gt; Receptions</a>.',
     fields: [
       { label: 'Code du gisement', name: 'gisement_code', attrs: 'required' },
       { label: 'ISBN du livre', name: 'isbn', attrs: 'required' },
@@ -269,7 +270,10 @@ export async function viewRangement(el) {
     keepFields: ['gisement_code'],
     onSubmit: async (data) => {
       const r = await POST('/api/warehouse/rangement', data);
-      return { line: `${r.qty} × ${r.product.title}`, sub: `ranges dans ${esc(r.gisement)}` };
+      return {
+        line: `${r.qty} × ${r.product.title}`,
+        sub: `places dans ${esc(r.gisement)}${r.unplaced > 0 ? ` — reste ${r.unplaced} exemplaire(s) a placer` : ''}`
+      };
     }
   });
 }

@@ -24,6 +24,8 @@ require('./api/returns');
 require('./api/containers');
 require('./api/invoices');
 require('./api/accounting');
+require('./api/purchases');
+require('./api/inventory');
 require('./api/portal');
 require('./lib/print');
 
@@ -59,6 +61,51 @@ function serveStatic(res, pathname) {
   });
 }
 
+/*
+ * Permissions par role (cote serveur).
+ * entrepot : operations logistiques uniquement — pas de comptabilite, reglements,
+ * factures, utilisateurs, ni facturation/finalisation de documents commerciaux.
+ * commercial : tout sauf gestion des utilisateurs (les parametres restent admin via l'API settings).
+ */
+const ENTREPOT_DENY_PREFIXES = ['/api/accounting', '/api/payments', '/api/invoices', '/api/users'];
+const ENTREPOT_DENY_SUFFIXES = ['/invoice', '/finalize'];
+function checkRole(role, method, pathname) {
+  if (role === 'admin') return;
+  if (pathname === '/api/me' || pathname === '/api/logout') return;
+  if (role === 'commercial') {
+    if (pathname.startsWith('/api/users')) throw new ApiError(403, 'Reserve aux administrateurs');
+    return;
+  }
+  if (role === 'entrepot') {
+    if (ENTREPOT_DENY_PREFIXES.some((p) => pathname.startsWith(p))
+      || ENTREPOT_DENY_SUFFIXES.some((s) => pathname.endsWith(s))
+      || (pathname.startsWith('/api/thirdparties') && method !== 'GET')
+      || (pathname.startsWith('/api/settings') && method !== 'GET')) {
+      throw new ApiError(403, 'Votre role Entrepot ne permet pas cette action');
+    }
+  }
+}
+
+/* Sauvegarde quotidienne de la base (VACUUM INTO : coherent meme a chaud). Conserve les 14 dernieres. */
+const BACKUP_DIR = path.join(__dirname, 'backups');
+function backupDatabase() {
+  try {
+    const { db } = require('./lib/db');
+    if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+    const file = path.join(BACKUP_DIR, `erpsoft-${stamp}.db`);
+    if (fs.existsSync(file)) return;
+    db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    const all = fs.readdirSync(BACKUP_DIR).filter((f) => f.endsWith('.db')).sort();
+    while (all.length > 14) fs.unlinkSync(path.join(BACKUP_DIR, all.shift()));
+    console.log('[backup] Sauvegarde creee :', path.basename(file));
+  } catch (e) {
+    console.error('[backup] Echec de la sauvegarde :', e.message);
+  }
+}
+backupDatabase();
+setInterval(backupDatabase, 24 * 60 * 60 * 1000);
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const pathname = url.pathname;
@@ -74,6 +121,7 @@ const server = http.createServer(async (req, res) => {
     if (m.r.auth === 'staff') {
       session = getSession(req, 'staff');
       if (!session) throw new ApiError(401, 'Authentification requise');
+      checkRole(session.user.role, req.method, pathname);
     } else if (m.r.auth === 'portal') {
       session = getSession(req, 'portal');
       if (!session) throw new ApiError(401, 'Authentification requise');
