@@ -49,6 +49,37 @@ export function productPicker(onPick, { withQty = true } = {}) {
   renderList('');
 }
 
+/* Modale d'emballage / expedition : transporteur, suivi, colisage -> genere le BL. */
+export const CARRIERS = ['DPD', 'Exapad', 'Colissimo', 'Chronopost', 'GLS', 'Par nos soins', 'A dispo Gradignan'];
+
+export function shipModal(o, onDone) {
+  const crates = (o.crates || []).map((c) => `<span class="badge green">${esc(c.code)}</span>`).join(' ');
+  const { overlay, close } = modal({
+    title: `Expedier ${o.ref} — bon de livraison`,
+    body: `${crates ? `<p style="margin-top:0;color:var(--text-2)">Contenu prepare dans : ${crates}</p>` : ''}
+      <div class="form-grid">
+      ${field('Transporteur', `<input class="input" name="carrier" list="carriers-dl" autocomplete="off" placeholder="DPD, Exapad, par nos soins…">
+        <datalist id="carriers-dl">${CARRIERS.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>`)}
+      ${field('N° de suivi', input('tracking', ''))}
+      ${field('Nombre de colis', input('nb_colis', 1, 'type="number" min="1"'))}
+      ${field('Poids (kg)', input('weight_kg', '', 'type="number" step="0.1" min="0"'))}
+      ${field('Note', input('note', ''), 'wide')}
+    </div>`,
+    footer: `<button class="btn" data-act="c">Annuler</button>
+      <button class="btn primary" data-act="s">${icon('truck', 14)} Expedier et generer le BL</button>`
+  });
+  overlay.querySelector('[data-act=c]').onclick = close;
+  overlay.querySelector('[data-act=s]').onclick = async () => {
+    try {
+      const r = await POST(`/api/orders/${o.id}/ship`, readForm(overlay));
+      toast(`Commande expediee — bon de livraison ${r.shipment.ref} genere.`);
+      close();
+      window.open('/print/shipment/' + r.shipment.id, '_blank');
+      if (onDone) onDone(r);
+    } catch (e) { toastErr(e); }
+  };
+}
+
 export async function clientSelectOptions() {
   const clients = await GET('/api/thirdparties?type=client');
   return clients.map((c) => ({ value: c.id, label: `${c.name} (${c.code})` }));
@@ -136,6 +167,7 @@ export async function viewOrder(el, params, ctx) {
           <span class="badge">${esc(orderTypeLabel(o.order_type))}</span>
           <span class="badge">Priorite ${o.priority}</span>
           ${o.source === 'portail' ? '<span class="badge purple">Portail</span>' : ''}
+          ${(o.crates || []).map((c) => `<span class="badge green">${icon('box', 12)} ${esc(c.code)}</span>`).join('')}
           <div class="spacer"></div>
           <a class="btn" href="/print/order/${o.id}" target="_blank">${icon('print', 14)} Bon de preparation</a>
           ${isDraft ? `<button class="btn primary" id="ovalidate">${icon('check', 14)} Valider</button>` : ''}
@@ -176,7 +208,7 @@ export async function viewOrder(el, params, ctx) {
               <td class="main-cell"><a href="#/products/${l.fk_product}">${esc(l.title)}</a><span class="sub">${esc(l.isbn)}</span></td>
               <td style="font-size:12px;color:var(--text-2)">${esc(l.locations || '—')}</td>
               <td class="num">${isDraft ? `<input class="input" style="width:70px" type="number" min="1" value="${l.qty}" data-lqty="${l.id}">` : num(l.qty)}</td>
-              <td class="num">${num(l.qty_picked)}</td>
+              <td class="num">${num(l.qty_picked)}${l.unavailable ? ' <span class="badge red">Indispo.</span>' : ''}</td>
               <td class="num">${isDraft ? `<input class="input" style="width:90px" type="number" step="0.01" value="${l.price_ht}" data-lprice="${l.id}">` : eur(l.price_ht)}</td>
               <td class="num">${l.discount_pct || 0} %</td>
               <td class="num">${eur(l.qty * l.price_ht * (1 - l.discount_pct / 100))}</td>
@@ -195,30 +227,7 @@ export async function viewOrder(el, params, ctx) {
       try { await POST(`/api/orders/${o.id}/start-picking`); ctx.navigate('picking/' + o.id); }
       catch (e) { toastErr(e); }
     });
-    on('#oship', () => {
-      const { overlay, close } = modal({
-        title: `Expedier ${o.ref} — bon de livraison`,
-        body: `<div class="form-grid">
-          ${field('Transporteur', input('carrier', '', 'placeholder="DPD, Colissimo, par nos soins…"'))}
-          ${field('N° de suivi', input('tracking', ''))}
-          ${field('Nombre de colis', input('nb_colis', 1, 'type="number" min="1"'))}
-          ${field('Poids (kg)', input('weight_kg', '', 'type="number" step="0.1" min="0"'))}
-          ${field('Note', input('note', ''), 'wide')}
-        </div>`,
-        footer: `<button class="btn" data-act="c">Annuler</button>
-          <button class="btn primary" data-act="s">${icon('truck', 14)} Expedier et generer le BL</button>`
-      });
-      overlay.querySelector('[data-act=c]').onclick = close;
-      overlay.querySelector('[data-act=s]').onclick = async () => {
-        try {
-          const r = await POST(`/api/orders/${o.id}/ship`, readForm(overlay));
-          toast(`Commande expediee — bon de livraison ${r.shipment.ref} genere.`);
-          close();
-          window.open('/print/shipment/' + r.shipment.id, '_blank');
-          render();
-        } catch (e) { toastErr(e); }
-      };
-    });
+    on('#oship', () => shipModal(o, render));
     on('#obackorder', async () => {
       if (!await confirmDialog(`Generer une commande reliquat pour les ${o.qty_total - o.qty_picked} exemplaire(s) non servi(s) ? Elle entrera directement en file de preparation.`)) return;
       try {

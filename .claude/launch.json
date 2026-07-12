@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "erpsoft",
-      "runtimeExecutable": "node",
+      "runtimeExecutable": "/Users/ricouzar/.local/node/bin/node",
       "runtimeArgs": ["server.js"],
       "port": 3000
     }

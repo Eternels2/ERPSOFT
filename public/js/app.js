@@ -1,12 +1,12 @@
 /* ERPSOFT - shell applicatif : authentification, navigation, routage */
 import { GET, POST } from './api.js';
-import { esc, icon, toastErr } from './ui.js';
+import { esc, icon, toast, toastErr } from './ui.js';
 
 import { viewDashboard } from './views/dashboard.js';
 import { viewProducts, viewProduct } from './views/products.js';
 import { viewThirdparties, viewThirdparty } from './views/thirdparties.js';
 import { viewOrders, viewOrder } from './views/orders.js';
-import { viewQueue, viewPicking, viewGisements, viewGisement, viewRangement, viewTransfert, viewReintegration } from './views/warehouse.js';
+import { viewQueue, viewPicking, viewGisements, viewGisement, viewRangement, viewTransfert, viewReintegration, viewCrates } from './views/warehouse.js';
 import { viewConsignments, viewConsignment } from './views/consignments.js';
 import { viewReturns, viewReturn } from './views/returns.js';
 import { viewContainers, viewContainer } from './views/containers.js';
@@ -48,6 +48,7 @@ const routes = [
   { path: 'expeditions', view: viewShipments, title: 'Expeditions' },
   { path: 'inventaires', view: viewInventories, title: 'Inventaires' },
   { path: 'inventaires/:id', view: viewInventory, title: 'Inventaire' },
+  { path: 'caisses', view: viewCrates, title: 'Caisses & chariots' },
   { path: 'gisements', view: viewGisements, title: 'Gisements' },
   { path: 'gisements/:id', view: viewGisement, title: 'Gisement' },
   { path: 'rangement', view: viewRangement, title: 'Rangement' },
@@ -93,6 +94,7 @@ const NAV = [
   { path: 'reassort', icon: 'warehouse', label: 'Reassort' },
   { section: 'Entrepot' },
   { path: 'queue', icon: 'queue', label: 'File de preparation', countKey: 'queue' },
+  { path: 'caisses', icon: 'box', label: 'Caisses & chariots' },
   { path: 'rangement', icon: 'scan', label: 'Rangement' },
   { path: 'gisements', icon: 'location', label: 'Gisements' },
   { path: 'transfert', icon: 'warehouse', label: 'Transfert gisement' },
@@ -212,6 +214,83 @@ function renderLogin() {
     }
   });
 }
+
+/* ------------------------------------------------------- scan global (douchette) */
+/*
+ * Une douchette/scannette tape les caracteres tres vite puis envoie Entree.
+ * Ce listener capte ces frappes quand aucun champ de saisie n'a le focus :
+ * ou que l'on soit dans l'application, scanner un code agit directement.
+ *  - caisse/chariot lie(e) a une preparation -> reprise du picking de la commande
+ *  - ISBN avec une preparation en cours sur ce poste -> bip valide automatiquement
+ *  - ISBN sans preparation en cours -> fiche du livre ; gisement -> fiche du gisement
+ */
+let scanBuf = '', scanLast = 0;
+
+const activePicking = {
+  get: () => localStorage.getItem('activePicking'),
+  set: (id) => localStorage.setItem('activePicking', String(id)),
+  clear: () => localStorage.removeItem('activePicking')
+};
+
+async function handleGlobalScan(code) {
+  let r;
+  try { r = await POST('/api/scan', { code }); }
+  catch (e) { toastErr(e); return; }
+
+  if (r.kind === 'crate') {
+    const label = r.crate.type === 'chariot' ? 'Chariot' : 'Caisse';
+    if (r.order && r.order.status === 2) {
+      activePicking.set(r.order.id);
+      toast(`${label} ${r.crate.code} — reprise du picking de ${r.order.ref} (${r.order.client_name})`);
+      navigate('picking/' + r.order.id);
+    } else if (r.order) {
+      toast(`${label} ${r.crate.code} — commande ${r.order.ref}`);
+      navigate('orders/' + r.order.id);
+    } else {
+      toast(`${label} ${r.crate.code} libre. Lancez une preparation puis scannez cette caisse pour la lier.`);
+    }
+    return;
+  }
+
+  if (r.kind === 'product') {
+    const orderId = activePicking.get();
+    if (orderId) {
+      try {
+        const p = await POST(`/api/orders/${orderId}/pick`, { isbn: code });
+        toast(`✓ ${p.product.title} — ${p.picked} / ${p.total} ex.`);
+        if (p.done) {
+          activePicking.clear();
+          toast('Commande entierement preparee — direction emballage !');
+          navigate('orders/' + orderId);
+        } else if (location.hash === '#/picking/' + orderId) {
+          renderRoute();
+        }
+      } catch (e) {
+        toastErr(e);
+        if (location.hash !== '#/picking/' + orderId) navigate('picking/' + orderId);
+      }
+    } else {
+      navigate('products/' + r.product.id);
+    }
+    return;
+  }
+
+  if (r.kind === 'gisement') navigate('gisements/' + r.gisement.id);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!currentUser) return;
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  const now = Date.now();
+  if (now - scanLast > 250) scanBuf = ''; // frappe humaine : trop lent, on repart
+  scanLast = now;
+  if (e.key === 'Enter') {
+    if (scanBuf.length >= 3) { const code = scanBuf; scanBuf = ''; handleGlobalScan(code); }
+    return;
+  }
+  if (e.key.length === 1) scanBuf += e.key;
+});
 
 /* ------------------------------------------------------------- init */
 window.addEventListener('hashchange', renderRoute);

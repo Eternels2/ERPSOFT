@@ -42,12 +42,51 @@ export async function viewQueue(el, params, ctx) {
 }
 
 /* ============================= PICKING (scan) ============================= */
+/*
+ * Flux entrepot : on scanne d'abord une caisse ou un chariot (il est lie a la
+ * commande), puis chaque bip d'ISBN valide automatiquement un exemplaire.
+ * Si le stock ne permet pas de servir, la ligne est marquee "indisponible"
+ * (elle partira en reliquat) et la preparation se cloture toute seule quand
+ * toutes les lignes sont servies ou indisponibles.
+ */
 export async function viewPicking(el, params, ctx) {
   let statusHtml = '';
+
+  const finish = (o, msg) => {
+    localStorage.removeItem('activePicking');
+    toast(msg || 'Commande preparee — direction emballage !');
+    ctx.navigate('orders/' + o.id);
+  };
+
   const render = async () => {
     const o = await GET('/api/orders/' + params.id);
-    if (o.status !== 2) { ctx.navigate('orders/' + o.id); return; }
+    if (o.status !== 2) {
+      if (localStorage.getItem('activePicking') === String(o.id)) localStorage.removeItem('activePicking');
+      ctx.navigate('orders/' + o.id);
+      return;
+    }
+    localStorage.setItem('activePicking', String(o.id));
     const progress = o.qty_total ? Math.round(o.qty_picked / o.qty_total * 100) : 0;
+    const crates = o.crates || [];
+    const hasCrate = crates.length > 0;
+
+    const crateBadges = crates.map((c) =>
+      `<span class="badge green">${icon('box', 12)} ${esc(c.code)}</span>`).join(' ');
+
+    const scanPanel = hasCrate
+      ? `<form id="pkform" class="form-grid" style="grid-template-columns:1fr 1fr;align-items:end">
+          ${field('ISBN du livre — chaque bip valide 1 exemplaire', input('isbn', '', 'class="input big" autocomplete="off" autofocus'))}
+          ${field('Gisement (scan, optionnel)', input('gisement_code', '', 'class="input big" autocomplete="off"'))}
+        </form>
+        <p style="color:var(--text-3);font-size:12px;margin-bottom:0">
+          La validation est automatique au scan — aucun clic necessaire, meme depuis un autre ecran.
+          Scannez une autre caisse pour l'ajouter a la commande.</p>`
+      : `<form id="crform">
+          ${field('Scannez la caisse ou le chariot pour demarrer', input('code', '', 'class="input big" autocomplete="off" autofocus placeholder="Code de la caisse…"'))}
+        </form>
+        <p style="color:var(--text-3);font-size:12px;margin-bottom:0">
+          La caisse est liee a cette commande : la scanner depuis n'importe quel ecran ramene a cette preparation.
+          <a href="#/caisses">Gerer les caisses & chariots</a></p>`;
 
     el.innerHTML = `
       <div style="margin-bottom:14px"><a href="#/queue">${icon('returns', 13)} Retour a la file</a></div>
@@ -56,6 +95,7 @@ export async function viewPicking(el, params, ctx) {
           <div class="card">
             <div class="card-head">
               <h2>Picking — ${esc(o.ref)} · ${esc(o.client_name)}</h2>
+              ${crateBadges}
               <div class="spacer"></div>
               <a class="btn sm" href="/print/order/${o.id}" target="_blank">${icon('print', 13)} Bon</a>
               <button class="btn sm" id="pkclose">Cloturer (reliquats)</button>
@@ -64,13 +104,7 @@ export async function viewPicking(el, params, ctx) {
               <div class="progress" style="margin-bottom:6px"><div style="width:${progress}%"></div></div>
               <div style="color:var(--text-2);font-size:13px;margin-bottom:16px">${num(o.qty_picked)} / ${num(o.qty_total)} exemplaires prepares</div>
               <div id="pkstatus">${statusHtml}</div>
-              <form id="pkform" class="form-grid" style="grid-template-columns:1fr 1fr auto;align-items:end">
-                ${field('ISBN du livre (scan)', input('isbn', '', 'class="input big" autocomplete="off" autofocus'))}
-                ${field('Gisement (scan, optionnel)', input('gisement_code', '', 'class="input big" autocomplete="off"'))}
-                <button class="btn primary lg">${icon('check', 16)} Valider</button>
-              </form>
-              <p style="color:var(--text-3);font-size:12px;margin-bottom:0">
-                Scannez l'ISBN puis validez. Renseignez le gisement pour decompter l'emplacement precis.</p>
+              ${scanPanel}
             </div>
           </div>
         </div>
@@ -81,9 +115,17 @@ export async function viewPicking(el, params, ctx) {
               <table class="table"><tbody>
                 ${o.lines.map((l) => {
                   const done = l.qty_picked >= l.qty;
-                  return `<tr style="${done ? 'opacity:.55' : ''}">
+                  const badge = l.unavailable
+                    ? `<span class="badge red">Indispo. ${num(l.qty_picked)} / ${num(l.qty)}</span>`
+                    : `<span class="badge ${done ? 'green' : 'blue'}">${num(l.qty_picked)} / ${num(l.qty)}</span>`;
+                  const action = done ? ''
+                    : l.unavailable
+                      ? `<button class="btn sm" data-reav="${l.id}" title="Annuler l'indisponibilite">↩</button>`
+                      : `<button class="btn sm" data-unav="${l.id}" title="Stock insuffisant : marquer indisponible (reliquat)">Indispo.</button>`;
+                  return `<tr style="${done || l.unavailable ? 'opacity:.55' : ''}">
                     <td class="main-cell">${esc(l.title)}<span class="sub">${esc(l.isbn)} — ${esc(l.locations || 'aucun gisement')}</span></td>
-                    <td class="num"><span class="badge ${done ? 'green' : 'blue'}">${num(l.qty_picked)} / ${num(l.qty)}</span></td></tr>`;
+                    <td class="num">${badge}</td>
+                    <td class="actions">${action}</td></tr>`;
                 }).join('')}
               </tbody></table>
             </div>
@@ -91,33 +133,172 @@ export async function viewPicking(el, params, ctx) {
         </div>
       </div>`;
 
-    const form = el.querySelector('#pkform');
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const f = readForm(form);
-      if (!f.isbn) return;
-      try {
-        const r = await POST(`/api/orders/${o.id}/pick`, f);
-        statusHtml = `<div class="scan-status ok"><div class="big-line">✓ ${esc(r.product.title)}</div>
-          ${r.qty} exemplaire(s) preleve(s) — ${num(r.picked)} / ${num(r.total)}</div>`;
-        if (r.done) {
-          toast('Commande entierement preparee !');
-          ctx.navigate('orders/' + o.id);
-          return;
+    /* Etape 1 : liaison de la caisse / du chariot */
+    const crform = el.querySelector('#crform');
+    if (crform) {
+      const submitCrate = async () => {
+        const { code } = readForm(crform);
+        if (!code) return;
+        try {
+          const r = await POST(`/api/orders/${o.id}/assign-crate`, { code });
+          statusHtml = `<div class="scan-status ok"><div class="big-line">✓ ${r.crate.type === 'chariot' ? 'Chariot' : 'Caisse'} ${esc(r.crate.code)} lie(e)</div>
+            Scannez maintenant les ISBN des livres.</div>`;
+        } catch (err) {
+          statusHtml = `<div class="scan-status ko"><div class="big-line">✗ Refus</div>${esc(err.message)}</div>`;
         }
-      } catch (err) {
-        statusHtml = `<div class="scan-status ko"><div class="big-line">✗ Refus</div>${esc(err.message)}</div>`;
-      }
-      render();
-    });
-    form.querySelector('[name=isbn]').focus();
+        render();
+      };
+      crform.addEventListener('submit', (e) => { e.preventDefault(); submitCrate(); });
+      const codeEl = crform.querySelector('[name=code]');
+      codeEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitCrate(); } });
+      codeEl.focus();
+    }
+
+    /* Etape 2 : bips ISBN — validation automatique (Entree envoyee par la douchette) */
+    const form = el.querySelector('#pkform');
+    if (form) {
+      const isbnEl = form.querySelector('[name=isbn]');
+      const submit = async () => {
+        const f = readForm(form);
+        if (!f.isbn) return;
+        // Une caisse scannee dans le champ ISBN est liee a la commande (caisse supplementaire)
+        try {
+          const s = await POST('/api/scan', { code: f.isbn });
+          if (s.kind === 'crate') {
+            const r = await POST(`/api/orders/${o.id}/assign-crate`, { code: f.isbn });
+            statusHtml = `<div class="scan-status ok"><div class="big-line">✓ ${r.crate.type === 'chariot' ? 'Chariot' : 'Caisse'} ${esc(r.crate.code)} ajoute(e)</div></div>`;
+            render();
+            return;
+          }
+          if (s.kind === 'gisement') {
+            form.querySelector('[name=gisement_code]').value = s.gisement.code;
+            isbnEl.value = '';
+            isbnEl.focus();
+            return;
+          }
+        } catch { /* code inconnu du resolveur : on tente le pick, qui donnera l'erreur precise */ }
+        try {
+          const r = await POST(`/api/orders/${o.id}/pick`, f);
+          statusHtml = `<div class="scan-status ok"><div class="big-line">✓ ${esc(r.product.title)}</div>
+            ${r.qty} exemplaire(s) preleve(s) — ${num(r.picked)} / ${num(r.total)}</div>`;
+          if (r.done) { finish(o); return; }
+        } catch (err) {
+          const line = o.lines.find((l) => l.isbn.replace(/[\s-]/g, '') === f.isbn.replace(/[\s-]/g, ''));
+          const canMark = line && !line.unavailable && line.qty_picked < line.qty;
+          statusHtml = `<div class="scan-status ko"><div class="big-line">✗ Refus</div>${esc(err.message)}
+            ${canMark ? `<div style="margin-top:8px"><button class="btn sm" id="pkmarkunav" data-line="${line.id}">Marquer indisponible (reliquat)</button></div>` : ''}</div>`;
+        }
+        render();
+      };
+      form.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+      // La touche Entree (envoyee par la douchette) valide, quel que soit le champ
+      form.querySelectorAll('input').forEach((inp) =>
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }));
+      // Douchette sans suffixe Entree : un EAN13 complet se valide tout seul
+      let autoT;
+      isbnEl.addEventListener('input', () => {
+        clearTimeout(autoT);
+        if (/^\d{13}$/.test(isbnEl.value.trim())) autoT = setTimeout(submit, 150);
+      });
+      isbnEl.focus();
+    }
+
+    /* Marquage / annulation "indisponible" */
+    const markUnavailable = async (lineId, undo) => {
+      try {
+        const r = await POST(`/api/orders/${o.id}/lines/${lineId}/unavailable`, { undo: !!undo });
+        if (r.done) { finish(o, 'Toutes les lignes sont traitees — commande preparee, direction emballage !'); return; }
+        render();
+      } catch (e) { toastErr(e); }
+    };
+    el.querySelectorAll('[data-unav]').forEach((b) => b.addEventListener('click', () => markUnavailable(b.dataset.unav)));
+    el.querySelectorAll('[data-reav]').forEach((b) => b.addEventListener('click', () => markUnavailable(b.dataset.reav, true)));
+    const mk = el.querySelector('#pkmarkunav');
+    if (mk) mk.addEventListener('click', () => { statusHtml = ''; markUnavailable(mk.dataset.line); });
 
     el.querySelector('#pkclose').onclick = async () => {
       if (!await confirmDialog('Cloturer la preparation ? Les quantites non preparees resteront en reliquat.')) return;
-      try { await POST(`/api/orders/${o.id}/close-picking`); toast('Preparation cloturee.'); ctx.navigate('orders/' + o.id); }
-      catch (e) { toastErr(e); }
+      try {
+        await POST(`/api/orders/${o.id}/close-picking`);
+        finish(o, 'Preparation cloturee.');
+      } catch (e) { toastErr(e); }
     };
   };
+  await render();
+}
+
+/* ============================= CAISSES & CHARIOTS ============================= */
+function crateFormModal(existing, onSaved) {
+  const c = existing || {};
+  const { overlay, close } = modal({
+    title: existing ? 'Modifier la caisse' : 'Nouvelle caisse / chariot',
+    body: `<div class="form-grid">
+      ${field('Code * (sert de code-barres)', input('code', c.code || '', 'required placeholder="Ex : CAISSE-05"'))}
+      ${field('Type', `<select class="input" name="type">
+        <option value="caisse" ${c.type !== 'chariot' ? 'selected' : ''}>Caisse</option>
+        <option value="chariot" ${c.type === 'chariot' ? 'selected' : ''}>Chariot</option>
+      </select>`)}
+    </div>`,
+    footer: `<button class="btn" data-act="c">Annuler</button><button class="btn primary" data-act="s">${existing ? 'Enregistrer' : 'Creer'}</button>`
+  });
+  overlay.querySelector('[data-act=c]').onclick = close;
+  overlay.querySelector('[data-act=s]').onclick = async () => {
+    try {
+      const data = readForm(overlay);
+      if (existing) await PUT('/api/crates/' + existing.id, data);
+      else await POST('/api/crates', data);
+      toast('Caisse enregistree.');
+      close(); onSaved();
+    } catch (e) { toastErr(e); }
+  };
+}
+
+export async function viewCrates(el, params, ctx) {
+  const render = async () => {
+    const rows = await GET('/api/crates');
+    el.querySelector('#crlist').innerHTML = dataTable({
+      empty: 'Aucune caisse — creez vos caisses et chariots puis imprimez leurs etiquettes',
+      columns: [
+        { label: 'Code', render: (c) => `<span class="main-cell">${esc(c.code)}</span>` },
+        { label: 'Type', render: (c) => `<span class="badge">${c.type === 'chariot' ? 'Chariot' : 'Caisse'}</span>` },
+        { label: 'Commande en cours', render: (c) => c.order_ref
+            ? `<a href="#/${c.order_status === 2 ? 'picking' : 'orders'}/${c.fk_order}">${esc(c.order_ref)}</a><span class="sub">${esc(c.client_name || '')}</span>`
+            : '<span class="badge green">Libre</span>' },
+        { label: '', cls: 'actions', render: (c) => `
+            ${c.fk_order ? `<button class="btn sm" data-release="${c.id}" title="Detacher de la commande">Liberer</button>` : ''}
+            <button class="btn sm" data-edit="${c.id}">${icon('edit', 13)}</button>
+            <button class="btn sm danger" data-del="${c.id}">${icon('trash', 13)}</button>` }
+      ],
+      rows
+    });
+    el.querySelectorAll('[data-release]').forEach((b) => b.addEventListener('click', async () => {
+      try { await POST(`/api/crates/${b.dataset.release}/release`); toast('Caisse liberee.'); render(); }
+      catch (e) { toastErr(e); }
+    }));
+    el.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {
+      crateFormModal(rows.find((c) => c.id === Number(b.dataset.edit)), render);
+    }));
+    el.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
+      if (!await confirmDialog('Supprimer cette caisse ?', { danger: true, okLabel: 'Supprimer' })) return;
+      try { await DEL('/api/crates/' + b.dataset.del); toast('Caisse supprimee.'); render(); }
+      catch (e) { toastErr(e); }
+    }));
+  };
+  el.innerHTML = `<div class="card">
+    <div class="card-head">
+      <h2>Caisses &amp; chariots de picking</h2>
+      <div class="spacer"></div>
+      <a class="btn" href="/print/labels/crates" target="_blank">${icon('print', 14)} Etiquettes code-barres</a>
+      <button class="btn primary" id="crnew">${icon('plus', 15)} Nouvelle caisse</button>
+    </div>
+    <div class="card-body" style="padding-bottom:0">
+      <p style="margin-top:0;color:var(--text-2)">Scannez une caisse au debut d'une preparation pour la lier a la commande :
+      les bips d'ISBN valident ensuite automatiquement les lignes, depuis n'importe quel ecran.
+      La caisse se libere a l'expedition de la commande.</p>
+    </div>
+    <div class="card-body flush" id="crlist"></div>
+  </div>`;
+  el.querySelector('#crnew').addEventListener('click', () => crateFormModal(null, render));
   await render();
 }
 

@@ -56,8 +56,15 @@ npm run reset
 - **Gisements** (emplacements) : le code du gisement sert de code-barres ;
   **etiquettes code-barres** (Code 39) imprimables en planche.
 - **File de preparation** triee par priorite, avec avancement.
-- **Picking scanne** : scan ISBN + gisement, decompte du stock et de l'emplacement,
-  cloture automatique quand tout est prepare.
+- **Caisses & chariots** : chaque contenant porte un code-barres (etiquettes imprimables) ;
+  on scanne la caisse au debut de la preparation pour la lier a la commande, elle suit la
+  commande jusqu'a l'emballage et se libere automatiquement a l'expedition.
+- **Picking scanne** : chaque bip d'ISBN valide automatiquement 1 exemplaire (gisement
+  optionnel pour decompter l'emplacement) — aucun clic necessaire. **Scan global** : ou que
+  l'on soit dans l'application, scanner une caisse ramene a sa preparation, scanner un ISBN
+  valide la ligne de la commande en cours sur le poste.
+- **Indisponibles** : si le stock ne permet pas de servir, la ligne est marquee indisponible
+  (part en reliquat) ; cloture automatique quand toutes les lignes sont servies ou indisponibles.
 - **Rangement** : placement des exemplaires recus dans leur gisement (borne par le
   non-place ; l'entree de stock se fait a la reception).
 - **Transfert** entre gisements et **reintegration** stock retour → stock principal.
@@ -65,6 +72,9 @@ npm run reset
   non-comptes a zero, validation avec ajustements traces.
 
 ### Expedition
+- **Poste emballage** : l'ecran Expeditions liste les commandes preparees (avec leurs
+  caisses) ; l'equipe emballage renseigne transporteur (DPD, Exapad, Colissimo…),
+  n° de suivi, colis et poids.
 - **Bons de livraison** (BL) numerotes et imprimables : transporteur, n° de suivi,
   nombre de colis, poids.
 - **Reliquats** : les quantites commandees non servies generent une commande reliquat

@@ -3,6 +3,7 @@ import {
   esc, eur, num, fdate, icon, toast, toastErr, modal, confirmDialog, readForm,
   field, input, select, dataTable
 } from '../ui.js';
+import { shipModal } from './orders.js';
 
 /* ==================== Inventaires ==================== */
 export async function viewInventories(el, params, ctx) {
@@ -167,10 +168,32 @@ export async function viewInventory(el, params, ctx) {
   await render();
 }
 
-/* ==================== Expeditions (bons de livraison) ==================== */
+/* ==================== Expeditions (emballage + bons de livraison) ==================== */
 export async function viewShipments(el) {
   let q = '';
   const render = async () => {
+    /* Poste emballage : commandes preparees en attente d'expedition */
+    const toPack = await GET('/api/orders?status=3');
+    el.querySelector('#packlist').innerHTML = dataTable({
+      empty: 'Aucune commande en attente d\'emballage',
+      columns: [
+        { label: 'Commande', render: (o) => `<a href="#/orders/${o.id}" class="main-cell">${esc(o.ref)}</a><span class="sub">${fdate(o.date_order)}</span>` },
+        { label: 'Client', render: (o) => esc(o.client_name) },
+        { label: 'Caisses', render: (o) => o.crates
+            ? o.crates.split(', ').map((c) => `<span class="badge green">${esc(c)}</span>`).join(' ')
+            : '—' },
+        { label: 'Exemplaires', cls: 'num', render: (o) => num(o.qty_picked) },
+        { label: '', cls: 'actions', render: (o) => `<button class="btn primary sm" data-pack="${o.id}">${icon('truck', 13)} Expedier</button>` }
+      ],
+      rows: toPack
+    });
+    el.querySelectorAll('[data-pack]').forEach((b) => b.addEventListener('click', async () => {
+      const o = toPack.find((x) => x.id === Number(b.dataset.pack));
+      // La modale attend les caisses en objets {code}
+      o.crates = o.crates ? o.crates.split(', ').map((code) => ({ code })) : [];
+      shipModal(o, render);
+    }));
+
     const rows = await GET('/api/shipments' + (q ? '?q=' + encodeURIComponent(q) : ''));
     el.querySelector('#shlist').innerHTML = dataTable({
       empty: 'Aucune expedition',
@@ -187,9 +210,14 @@ export async function viewShipments(el) {
       rows
     });
   };
-  el.innerHTML = `<div class="card">
+  el.innerHTML = `<div class="card" style="margin-bottom:18px">
+    <div class="card-head"><h2>${icon('box', 16)} A emballer — commandes preparees</h2></div>
+    <div class="card-body flush" id="packlist"></div>
+  </div>
+  <div class="card">
     <div class="card-head">
-      <div class="searchbar" style="width:320px">${icon('search')}<input class="input" id="shsearch" placeholder="BL, commande, client, n° de suivi…"></div>
+      <h2>Bons de livraison</h2>
+      <div class="searchbar" style="width:320px;margin-left:14px">${icon('search')}<input class="input" id="shsearch" placeholder="BL, commande, client, n° de suivi…"></div>
       <div class="spacer"></div>
     </div>
     <div class="card-body flush" id="shlist"></div>

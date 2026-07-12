@@ -26,6 +26,7 @@ function getOrder(id) {
     FROM order_lines l JOIN products p ON p.id = l.fk_product
     WHERE l.fk_order = ? ORDER BY l.position, l.id`).all(Number(id));
   o.shipments = db.prepare('SELECT id, ref, carrier, tracking, nb_colis, date_shipment FROM shipments WHERE fk_order = ? ORDER BY id').all(o.id);
+  o.crates = db.prepare('SELECT id, code, type FROM crates WHERE fk_order = ? ORDER BY code').all(o.id);
   if (o.fk_backorder) {
     const bo = db.prepare('SELECT ref FROM orders WHERE id = ?').get(o.fk_backorder);
     o.backorder_ref = bo ? bo.ref : null;
@@ -39,7 +40,8 @@ route('GET', '/api/orders', async (ctx) => {
   let sql = `SELECT o.*, c.name AS client_name,
       (SELECT COALESCE(SUM(qty * price_ht * (1 - discount_pct/100.0)),0) FROM order_lines WHERE fk_order = o.id) AS total_ht,
       (SELECT COALESCE(SUM(qty),0) FROM order_lines WHERE fk_order = o.id) AS qty_total,
-      (SELECT COALESCE(SUM(qty_picked),0) FROM order_lines WHERE fk_order = o.id) AS qty_picked
+      (SELECT COALESCE(SUM(qty_picked),0) FROM order_lines WHERE fk_order = o.id) AS qty_picked,
+      (SELECT GROUP_CONCAT(code, ', ') FROM crates WHERE fk_order = o.id) AS crates
     FROM orders o JOIN thirdparties c ON c.id = o.fk_client WHERE 1=1`;
   const args = [];
   if (status !== undefined && status !== '') { sql += ' AND o.status = ?'; args.push(Number(status)); }
@@ -173,7 +175,40 @@ route('POST', '/api/orders/:id/start-picking', async (ctx) => {
   return { ok: true };
 });
 
-/* Scan de picking : gisement + ISBN -> decompte stock principal et gisement, incremente qty_picked. */
+/*
+ * Liaison d'une caisse / d'un chariot a la commande en preparation.
+ * La caisse suit la commande jusqu'a l'emballage et se libere a l'expedition.
+ */
+route('POST', '/api/orders/:id/assign-crate', async (ctx) => {
+  const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(Number(ctx.params.id));
+  if (!o) throw new ApiError(404, 'Commande introuvable');
+  if (o.status !== 2) throw new ApiError(400, 'La commande doit etre en preparation pour lier une caisse');
+  const code = String(ctx.body.code || '').trim();
+  const cr = db.prepare('SELECT * FROM crates WHERE UPPER(code) = UPPER(?) AND active = 1').get(code);
+  if (!cr) throw new ApiError(404, `Aucune caisse ou chariot pour le code "${code}" — creez-le dans Entrepot > Caisses & chariots`);
+  if (cr.fk_order && cr.fk_order !== o.id) {
+    const other = db.prepare('SELECT ref, status FROM orders WHERE id = ?').get(cr.fk_order);
+    if (other && other.status >= 2 && other.status <= 3) {
+      throw new ApiError(400, `${cr.type === 'chariot' ? 'Le chariot' : 'La caisse'} ${cr.code} est deja en service sur la commande ${other.ref}`);
+    }
+  }
+  db.prepare('UPDATE crates SET fk_order = ? WHERE id = ?').run(o.id, cr.id);
+  return { ok: true, crate: { id: cr.id, code: cr.code, type: cr.type } };
+});
+
+/*
+ * La preparation est complete quand chaque ligne est servie ou declaree indisponible.
+ * Retourne true si la commande vient de passer "preparee" (part a l'emballage).
+ */
+function closeIfComplete(orderId) {
+  const open = db.prepare('SELECT COUNT(*) AS n FROM order_lines WHERE fk_order = ? AND unavailable = 0 AND qty_picked < qty')
+    .get(orderId).n;
+  if (open > 0) return false;
+  db.prepare('UPDATE orders SET status = 3 WHERE id = ?').run(orderId);
+  return true;
+}
+
+/* Scan de picking : ISBN (+ gisement optionnel) -> decompte stock, incremente qty_picked. */
 route('POST', '/api/orders/:id/pick', async (ctx) => {
   const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(Number(ctx.params.id));
   if (!o) throw new ApiError(404, 'Commande introuvable');
@@ -198,16 +233,40 @@ route('POST', '/api/orders/:id/pick', async (ctx) => {
   const result = tx(() => {
     stockMove(p.id, 'main', -n, 'Picking commande ' + o.ref, o.ref, ctx.session.user.id);
     if (g) gisementMove(p.id, g.id, -n);
-    db.prepare('UPDATE order_lines SET qty_picked = qty_picked + ? WHERE id = ?').run(n, line.id);
+    // Un bip reussi annule un eventuel marquage "indisponible" (le stock est revenu)
+    db.prepare('UPDATE order_lines SET qty_picked = qty_picked + ?, unavailable = 0 WHERE id = ?').run(n, line.id);
+    const done = closeIfComplete(o.id);
     const t = orderTotals(o.id);
-    let done = false;
-    if (t.qty_picked >= t.qty_total) {
-      db.prepare('UPDATE orders SET status = 3 WHERE id = ?').run(o.id);
-      done = true;
-    }
     return { done, picked: t.qty_picked, total: t.qty_total };
   });
-  return { ok: true, product: { id: p.id, title: p.title }, qty: n, ...result };
+  return {
+    ok: true, product: { id: p.id, title: p.title }, qty: n,
+    line: { id: line.id, qty: line.qty, qty_picked: line.qty_picked + n },
+    ...result
+  };
+});
+
+/*
+ * Ligne indisponible : le stock ne permet pas de servir — la ligne est consideree
+ * traitee (la quantite manquante partira en reliquat) et la preparation peut se
+ * cloturer automatiquement. body.undo = true pour annuler le marquage.
+ */
+route('POST', '/api/orders/:id/lines/:lineId/unavailable', async (ctx) => {
+  const o = db.prepare('SELECT * FROM orders WHERE id = ?').get(Number(ctx.params.id));
+  if (!o) throw new ApiError(404, 'Commande introuvable');
+  if (o.status !== 2) throw new ApiError(400, "La commande n'est pas en preparation");
+  const line = db.prepare('SELECT * FROM order_lines WHERE id = ? AND fk_order = ?').get(Number(ctx.params.lineId), o.id);
+  if (!line) throw new ApiError(404, 'Ligne introuvable');
+  if (ctx.body.undo) {
+    db.prepare('UPDATE order_lines SET unavailable = 0 WHERE id = ?').run(line.id);
+    return { ok: true, done: false };
+  }
+  if (line.qty_picked >= line.qty) throw new ApiError(400, 'Cette ligne est deja entierement preparee');
+  const done = tx(() => {
+    db.prepare('UPDATE order_lines SET unavailable = 1 WHERE id = ?').run(line.id);
+    return closeIfComplete(o.id);
+  });
+  return { ok: true, done };
 });
 
 /* Cloture manuelle de la preparation (reliquats non servis). */
@@ -232,6 +291,8 @@ route('POST', '/api/orders/:id/ship', async (ctx) => {
       .run(ref, o.id, o.fk_client, b.carrier || null, b.tracking || null,
         Math.max(1, Number(b.nb_colis) || 1), b.weight_kg ? Number(b.weight_kg) : null, b.note || null, ctx.session.user.id);
     db.prepare("UPDATE orders SET status = 4, date_shipped = date('now') WHERE id = ?").run(o.id);
+    // Les caisses/chariots redeviennent disponibles pour d'autres preparations
+    db.prepare('UPDATE crates SET fk_order = NULL WHERE fk_order = ?').run(o.id);
     return { id: Number(r.lastInsertRowid), ref };
   });
   return { ok: true, shipment };
@@ -286,7 +347,8 @@ route('POST', '/api/orders/:id/invoice', async (ctx) => {
     .map((l) => ({
       fk_product: l.fk_product,
       label: `${l.title} (${l.isbn})`,
-      qty: l.qty_picked > 0 ? l.qty_picked : l.qty,
+      // Ligne indisponible : seule la quantite reellement preparee est facturable
+      qty: l.unavailable ? l.qty_picked : (l.qty_picked > 0 ? l.qty_picked : l.qty),
       price_ht: round2(l.price_ht * (1 - l.discount_pct / 100)),
       tva_rate: l.tva_rate
     }))
@@ -308,7 +370,10 @@ route('POST', '/api/orders/:id/cancel', async (ctx) => {
   if (o.status >= 4) throw new ApiError(400, 'Une commande expediee ou facturee ne peut plus etre annulee');
   const picked = db.prepare('SELECT COALESCE(SUM(qty_picked),0) AS s FROM order_lines WHERE fk_order = ?').get(o.id).s;
   if (picked > 0) throw new ApiError(400, 'Des articles ont deja ete preleves : terminez la preparation ou reintegrez le stock');
-  db.prepare('UPDATE orders SET status = -1 WHERE id = ?').run(o.id);
+  tx(() => {
+    db.prepare('UPDATE orders SET status = -1 WHERE id = ?').run(o.id);
+    db.prepare('UPDATE crates SET fk_order = NULL WHERE fk_order = ?').run(o.id);
+  });
   return { ok: true };
 });
 

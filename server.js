@@ -18,6 +18,7 @@ require('./api/dashboard');
 require('./api/thirdparties');
 require('./api/products');
 require('./api/gisements');
+require('./api/crates');
 require('./api/orders');
 require('./api/consignments');
 require('./api/returns');
