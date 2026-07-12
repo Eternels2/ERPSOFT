@@ -1,0 +1,14 @@
+{
+  "name": "erpsoft",
+  "version": "1.0.0",
+  "description": "ERP Grossiste Livres - gestion commerciale, entrepot, depots-vente, retours et portail B2B",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "reset": "node scripts/reset.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "GPL-3.0-or-later"
+}

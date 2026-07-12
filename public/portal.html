@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portail Libraires — ERPSOFT</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23b45309'/%3E%3Cpath d='M6 6h5v12H6zM13 6h5v8h-5z' fill='%23fff'/%3E%3C/svg%3E">
+  <style>
+    .portal-topbar { background: var(--sidebar-bg); color: #fff; padding: 0 24px; height: 60px; display: flex; align-items: center; gap: 22px; position: sticky; top: 0; z-index: 50; }
+    .portal-topbar .plogo { font-weight: 700; font-size: 16px; display: flex; align-items: center; gap: 9px; }
+    .portal-topbar .plogo small { display: block; font-size: 10px; color: #b7c4bc; font-weight: 400; letter-spacing: 1px; text-transform: uppercase; }
+    .portal-nav { display: flex; gap: 4px; }
+    .portal-nav a { color: #b7c4bc; padding: 8px 14px; border-radius: 8px; font-size: 13.5px; font-weight: 600; }
+    .portal-nav a:hover { color: #fff; text-decoration: none; }
+    .portal-nav a.active { background: rgba(76,175,125,.18); color: #fff; }
+    .portal-user { margin-left: auto; font-size: 13px; color: #b7c4bc; display: flex; gap: 14px; align-items: center; }
+    .portal-user b { color: #fff; }
+    .portal-user a { color: #b7c4bc; font-size: 12px; }
+    .portal-content { max-width: 1100px; margin: 0 auto; padding: 24px 20px 80px; }
+    .cart-bar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--primary); color: #fff; padding: 12px 24px; display: flex; align-items: center; gap: 18px; z-index: 60; box-shadow: 0 -4px 16px rgba(0,0,0,.15); }
+    .cart-bar b { font-size: 15px; }
+    .qty-input { width: 74px; text-align: center; }
+    .dispo-en-stock { color: var(--success); font-weight: 600; }
+    .dispo-stock-faible { color: var(--warning); font-weight: 600; }
+    .dispo-epuise { color: var(--text-3); }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div class="toasts" id="toasts"></div>
+  <script type="module" src="/js/portal.js"></script>
+</body>
+</html>
