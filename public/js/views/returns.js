@@ -81,7 +81,8 @@ export async function viewReturn(el, params, ctx) {
     const refused = r.lines.filter((l) => l.line_status === 0);
 
     const lineRow = (l) => `<tr>
-      <td class="main-cell"><a href="#/products/${l.fk_product}">${esc(l.title)}</a><span class="sub">${esc(l.isbn)} — ${esc(l.supplier_name || 'sans fournisseur')}</span></td>
+      <td class="main-cell"><a href="#/products/${l.fk_product}">${esc(l.title)}</a>
+        <span class="sub">${esc(l.isbn)} — ${esc(l.publisher || 'editeur inconnu')} — ${esc(l.supplier_name || 'sans fournisseur')}</span></td>
       <td class="num">${scanning ? `<input class="input" style="width:70px" type="number" min="1" value="${l.qty}" data-lqty="${l.id}">` : num(l.qty)}</td>
       <td class="num">${eur(l.price_ht)}</td>
       <td>${l.date_last_sale ? fdate(l.date_last_sale) : '<span class="badge red">Jamais vendu</span>'}</td>
@@ -161,10 +162,13 @@ export async function viewReturn(el, params, ctx) {
         if (!isbn) return;
         try {
           const res = await POST(`/api/returns/${r.id}/scan`, { isbn });
+          const bookLine = `${esc(res.product.publisher || 'editeur inconnu')} — ${esc(res.product.supplier || 'sans fournisseur')}`;
           statusHtml = res.line_status === 1
             ? `<div class="scan-status ok"><div class="big-line">✓ ${esc(res.product.title)} : ACCEPTE</div>
+                <div class="sub" style="margin-bottom:4px">${bookLine}</div>
                 ${res.incremented ? 'Quantite incrementee.' : ''} Derniere vente : ${res.date_last_sale ? fdate(res.date_last_sale) : '—'}</div>`
             : `<div class="scan-status ko"><div class="big-line">✗ ${esc(res.product.title)} : REFUSE</div>
+                <div class="sub" style="margin-bottom:4px">${bookLine}</div>
                 Motif propose : ${esc(REFUSE_REASONS[res.refuse_reason] || res.refuse_reason)}
                 ${res.refuse_reason === 'quota-depasse' ? ` — achete ${num(res.purchased_qty)}, deja retourne ${num(res.already_accepted_qty)}` : ''}
                  — corrigez la ligne si besoin.</div>`;

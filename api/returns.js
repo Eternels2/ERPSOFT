@@ -22,7 +22,7 @@ function getReturn(id) {
     FROM returns r JOIN thirdparties t ON t.id = r.fk_client
     LEFT JOIN invoices i ON i.id = r.fk_invoice WHERE r.id = ?`).get(Number(id));
   if (!r) throw new ApiError(404, 'Retour introuvable');
-  r.lines = db.prepare(`SELECT l.*, p.isbn, p.title, p.author, p.tva_rate, s.name AS supplier_name
+  r.lines = db.prepare(`SELECT l.*, p.isbn, p.title, p.author, p.publisher, p.tva_rate, s.name AS supplier_name
     FROM return_lines l JOIN products p ON p.id = l.fk_product
     LEFT JOIN thirdparties s ON s.id = l.fk_supplier
     WHERE l.fk_return = ? ORDER BY l.id DESC`).all(r.id);
@@ -82,6 +82,7 @@ route('POST', '/api/returns/:id/scan', async (ctx) => {
   if (r.status !== 0) throw new ApiError(400, 'Ce retour est deja finalise');
   const p = findByIsbn(ctx.body.isbn);
   if (!p) throw new ApiError(404, `Livre introuvable pour l'ISBN "${ctx.body.isbn}"`);
+  const supplier = p.fk_supplier ? db.prepare('SELECT name FROM thirdparties WHERE id = ?').get(p.fk_supplier) : null;
 
   const lastSale = lastSaleDate(r.fk_client, p.id);
   let status = 1, reason = null;
@@ -115,7 +116,10 @@ route('POST', '/api/returns/:id/scan', async (ctx) => {
   }
   return {
     ok: true, incremented,
-    product: { id: p.id, title: p.title, isbn: p.isbn },
+    product: {
+      id: p.id, title: p.title, isbn: p.isbn,
+      publisher: p.publisher || null, supplier: supplier ? supplier.name : null
+    },
     line_status: status, refuse_reason: reason, date_last_sale: lastSale,
     purchased_qty: purchased, already_accepted_qty: alreadyAccepted
   };
@@ -135,18 +139,9 @@ route('PUT', '/api/returns/:id/lines/:lineId', async (ctx) => {
   else if (!REFUSE_REASONS.includes(reason)) reason = 'autre';
   const qty = b.qty !== undefined ? Number(b.qty) : l.qty;
   if (qty <= 0) throw new ApiError(400, 'La quantite doit etre superieure a zero');
-  // Meme plafond que sur le scan : impossible d'accepter (ou d'augmenter une ligne
-  // acceptee) au-dela de ce que le client a reellement achete, toutes factures confondues.
-  if (status === 1) {
-    const purchased = purchasedQty(r.fk_client, l.fk_product);
-    const acceptedElsewhere = acceptedReturnQty(r.fk_client, l.fk_product, l.id);
-    if (acceptedElsewhere + qty > purchased) {
-      const remaining = Math.max(0, purchased - acceptedElsewhere);
-      throw new ApiError(400,
-        `Quantite refusee : le client a achete ${purchased} exemplaire(s) de ce livre (toutes factures confondues) `
-        + `et en a deja ${acceptedElsewhere} accepte(s) en retour ailleurs. Maximum acceptable ici : ${remaining}.`);
-    }
-  }
+  // Le plafond (achete toutes factures confondues) s'applique automatiquement au scan ;
+  // ici, en correction manuelle, l'operateur reste libre d'accepter au-dela si un motif
+  // legitime le justifie (erreur de facturation anterieure, geste commercial...).
   db.prepare('UPDATE return_lines SET line_status = ?, refuse_reason = ?, qty = ?, price_ht = ? WHERE id = ?')
     .run(status, reason, qty, b.price_ht !== undefined ? Number(b.price_ht) : l.price_ht, l.id);
   return { ok: true };
