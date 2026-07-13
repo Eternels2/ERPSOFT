@@ -85,23 +85,89 @@ export async function clientSelectOptions() {
   return clients.map((c) => ({ value: c.id, label: `${c.name} (${c.code})` }));
 }
 
-async function newOrderModal(ctx) {
-  const opts = await clientSelectOptions();
-  if (!opts.length) return toast('Creez d\'abord un client.', 'error');
+/*
+ * Selecteur de client par recherche (nom OU code, y compris un code personnalise) —
+ * evite un menu deroulant listant tous les clients. Saisie manuelle avec suggestions.
+ */
+export function clientPickerField(label = 'Client * (nom ou code)', opts = {}) {
+  return field(label, `
+    <div class="autocomplete" data-role="client-picker">
+      <input class="input" data-role="cp-search" autocomplete="off" placeholder="Tapez un nom ou un code…"
+        value="${esc(opts.initialLabel || '')}" ${opts.required !== false ? 'required' : ''}>
+      <input type="hidden" name="${opts.name || 'fk_client'}" data-role="cp-value" value="${opts.initialId || ''}">
+      <div class="autocomplete-list" data-role="cp-list" hidden></div>
+    </div>`, opts.cls ?? 'wide');
+}
+
+/* Attache le comportement du champ genere par clientPickerField(). A appeler apres l'insertion dans le DOM. */
+export function wireClientPicker(root, { onPick } = {}) {
+  const wrap = root.querySelector('[data-role=client-picker]');
+  if (!wrap) return { getId: () => null };
+  const searchEl = wrap.querySelector('[data-role=cp-search]');
+  const valueEl = wrap.querySelector('[data-role=cp-value]');
+  const listEl = wrap.querySelector('[data-role=cp-list]');
+  let items = [];
+  let t;
+
+  const hide = () => { listEl.hidden = true; listEl.innerHTML = ''; };
+  const pick = (c) => {
+    valueEl.value = c.id;
+    searchEl.value = `${c.name} (${c.code})`;
+    hide();
+    if (onPick) onPick(c);
+  };
+  const search = async (q) => (items = q ? await GET('/api/thirdparties?type=client&q=' + encodeURIComponent(q)) : []);
+  const renderList = (list) => {
+    if (!list.length) { listEl.innerHTML = '<div class="autocomplete-empty">Aucun client trouve</div>'; listEl.hidden = false; return; }
+    listEl.innerHTML = list.slice(0, 8).map((c, i) => `<div class="autocomplete-item" data-i="${i}">
+      <span class="main">${esc(c.name)}</span><span class="sub">${esc(c.code)}${c.town ? ' — ' + esc(c.town) : ''}</span></div>`).join('');
+    listEl.hidden = false;
+    listEl.querySelectorAll('[data-i]').forEach((el) => el.addEventListener('mousedown', (e) => {
+      e.preventDefault(); // eviter que le blur ne ferme la liste avant le clic
+      pick(list[Number(el.dataset.i)]);
+    }));
+  };
+  searchEl.addEventListener('input', () => {
+    valueEl.value = '';
+    clearTimeout(t);
+    const q = searchEl.value.trim();
+    if (!q) { hide(); return; }
+    t = setTimeout(async () => renderList(await search(q)), 220);
+  });
+  searchEl.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    clearTimeout(t);
+    const q = searchEl.value.trim();
+    if (!q) return;
+    const list = await search(q);
+    const exact = list.find((c) => c.code.toLowerCase() === q.toLowerCase());
+    if (exact) { pick(exact); return; }
+    if (list.length === 1) { pick(list[0]); return; }
+    renderList(list);
+  });
+  searchEl.addEventListener('blur', () => setTimeout(hide, 150));
+  return { getId: () => valueEl.value };
+}
+
+function newOrderModal(ctx) {
   const { overlay, close } = modal({
     title: 'Nouvelle commande',
     body: `<div class="form-grid">
-      ${field('Client', select('fk_client', opts, opts[0].value), 'wide')}
+      ${clientPickerField()}
       ${field('Type de commande', select('order_type', ORDER_TYPES, 'livraison'))}
       ${field('Priorite (1 = urgent)', input('priority', 5, 'type="number" min="1" max="9"'))}
       ${field('Note', `<textarea class="input" name="note" rows="2"></textarea>`, 'wide')}
     </div>`,
     footer: `<button class="btn" data-act="c">Annuler</button><button class="btn primary" data-act="s">Creer la commande</button>`
   });
+  wireClientPicker(overlay);
   overlay.querySelector('[data-act=c]').onclick = close;
   overlay.querySelector('[data-act=s]').onclick = async () => {
+    const data = readForm(overlay);
+    if (!data.fk_client) return toast('Selectionnez un client dans la liste (tapez son nom ou son code).', 'error');
     try {
-      const r = await POST('/api/orders', readForm(overlay));
+      const r = await POST('/api/orders', data);
       toast(`Commande ${r.ref} creee.`);
       close();
       ctx.navigate('orders/' + r.id);

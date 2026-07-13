@@ -16,12 +16,22 @@ function computeFees(mode, nbColis, acceptedHt) {
   return 0; // gradignan et a-dispo : sans frais
 }
 
+/* Taux de retour du client sur l'annee en cours (meme calcul que sur sa fiche tiers). */
+function clientReturnRate(clientId) {
+  const year = new Date().getFullYear();
+  const y0 = `${year}-01-01`;
+  const ca = db.prepare(`SELECT COALESCE(SUM(total_ht),0) AS s FROM invoices WHERE fk_client = ? AND type='facture' AND status >= 1 AND date_invoice >= ?`).get(clientId, y0).s;
+  const av = db.prepare(`SELECT COALESCE(SUM(total_ht),0) AS s FROM invoices WHERE fk_client = ? AND type='avoir' AND status >= 1 AND date_invoice >= ?`).get(clientId, y0).s;
+  return ca > 0 ? round2(av / ca * 100) : 0;
+}
+
 function getReturn(id) {
-  const r = db.prepare(`SELECT r.*, t.name AS client_name, t.code AS client_code, t.delai_retour_mois,
+  const r = db.prepare(`SELECT r.*, t.name AS client_name, t.code AS client_code, t.delai_retour_mois, t.notes AS client_notes,
       i.ref AS invoice_ref
     FROM returns r JOIN thirdparties t ON t.id = r.fk_client
     LEFT JOIN invoices i ON i.id = r.fk_invoice WHERE r.id = ?`).get(Number(id));
   if (!r) throw new ApiError(404, 'Retour introuvable');
+  r.client_taux_retour = clientReturnRate(r.fk_client);
   r.lines = db.prepare(`SELECT l.*, p.isbn, p.title, p.author, p.publisher, p.tva_rate, s.name AS supplier_name
     FROM return_lines l JOIN products p ON p.id = l.fk_product
     LEFT JOIN thirdparties s ON s.id = l.fk_supplier

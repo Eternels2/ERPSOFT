@@ -64,11 +64,21 @@ function nextCode(type) {
   return prefix + String(n).padStart(3, '0');
 }
 
+/* Verifie qu'un code personnalise n'est pas deja utilise par un autre tiers. */
+function checkCodeAvailable(code, excludeId) {
+  const dup = db.prepare('SELECT id, name FROM thirdparties WHERE code = ? AND id != ?').get(code, excludeId || -1);
+  if (dup) throw new ApiError(400, `Le code "${code}" est deja utilise par ${dup.name}`);
+}
+
 route('POST', '/api/thirdparties', async (ctx) => {
   const b = ctx.body;
   if (!b.name) throw new ApiError(400, 'Le nom est obligatoire');
   const type = b.type === 'fournisseur' ? 'fournisseur' : 'client';
-  const code = b.code || nextCode(type);
+  let code = nextCode(type);
+  if (b.code && String(b.code).trim()) {
+    code = String(b.code).trim().toUpperCase();
+    checkCodeAvailable(code, null);
+  }
   const r = db.prepare(`INSERT INTO thirdparties (code, name, type, contact_name, email, phone, address, zip, town, country, delai_retour_mois, notes, siret, discount_pct, credit_limit, payment_terms_days)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(code, b.name, type, b.contact_name || null, b.email || null, b.phone || null, b.address || null,
@@ -83,8 +93,13 @@ route('PUT', '/api/thirdparties/:id', async (ctx) => {
   const t = db.prepare('SELECT * FROM thirdparties WHERE id = ?').get(id);
   if (!t) throw new ApiError(404, 'Tiers introuvable');
   const b = ctx.body;
-  db.prepare(`UPDATE thirdparties SET name=?, contact_name=?, email=?, phone=?, address=?, zip=?, town=?, country=?, delai_retour_mois=?, notes=?, siret=?, discount_pct=?, credit_limit=?, payment_terms_days=? WHERE id=?`)
-    .run(b.name ?? t.name, b.contact_name ?? t.contact_name, b.email ?? t.email, b.phone ?? t.phone,
+  let code = t.code;
+  if (b.code !== undefined && String(b.code).trim()) {
+    const newCode = String(b.code).trim().toUpperCase();
+    if (newCode !== t.code) { checkCodeAvailable(newCode, id); code = newCode; }
+  }
+  db.prepare(`UPDATE thirdparties SET code=?, name=?, contact_name=?, email=?, phone=?, address=?, zip=?, town=?, country=?, delai_retour_mois=?, notes=?, siret=?, discount_pct=?, credit_limit=?, payment_terms_days=? WHERE id=?`)
+    .run(code, b.name ?? t.name, b.contact_name ?? t.contact_name, b.email ?? t.email, b.phone ?? t.phone,
       b.address ?? t.address, b.zip ?? t.zip, b.town ?? t.town, b.country ?? t.country,
       b.delai_retour_mois !== undefined ? Number(b.delai_retour_mois) : t.delai_retour_mois, b.notes ?? t.notes,
       b.siret ?? t.siret,
@@ -92,7 +107,7 @@ route('PUT', '/api/thirdparties/:id', async (ctx) => {
       b.credit_limit !== undefined ? Number(b.credit_limit) || 0 : t.credit_limit,
       b.payment_terms_days !== undefined ? (b.payment_terms_days ? Number(b.payment_terms_days) : null) : t.payment_terms_days,
       id);
-  return { ok: true };
+  return { ok: true, code };
 });
 
 /* Acces portail B2B d'un client */

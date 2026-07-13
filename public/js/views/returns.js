@@ -3,7 +3,7 @@ import {
   esc, eur, num, fdate, icon, toast, toastErr, modal, confirmDialog, readForm,
   field, input, select, dataTable, RETURN_MODES, REFUSE_REASONS
 } from '../ui.js';
-import { clientSelectOptions } from './orders.js';
+import { clientPickerField, wireClientPicker } from './orders.js';
 
 const modeLabel = (m) => (RETURN_MODES.find((x) => x.value === m) || { label: m }).label;
 const statusBadge = (s) => s === 1 ? '<span class="badge dot green">Finalise</span>' : '<span class="badge dot orange">En scan</span>';
@@ -46,23 +46,24 @@ export async function viewReturns(el, params, ctx) {
   let t;
   el.querySelector('#rsearch').addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { q = e.target.value; render(); }, 250); });
   el.querySelector('#rstatus').addEventListener('change', (e) => { status = e.target.value; render(); });
-  el.querySelector('#rnew').addEventListener('click', async () => {
-    const opts = await clientSelectOptions();
-    if (!opts.length) return toast('Creez d\'abord un client.', 'error');
+  el.querySelector('#rnew').addEventListener('click', () => {
     const { overlay, close } = modal({
       title: 'Nouveau retour client',
       body: `<div class="form-grid">
-        ${field('Client', select('fk_client', opts, opts[0].value), 'wide')}
+        ${clientPickerField()}
         ${field('Mode de retour', select('return_mode', RETURN_MODES, 'gradignan'))}
         ${field('Nombre de colis recus', input('nb_colis', 1, 'type="number" min="1"'))}
         ${field('Objet', input('objet', '', 'placeholder="Ex : retour rentree"'), 'wide')}
       </div>`,
       footer: `<button class="btn" data-act="c">Annuler</button><button class="btn primary" data-act="s">Commencer le scan</button>`
     });
+    wireClientPicker(overlay);
     overlay.querySelector('[data-act=c]').onclick = close;
     overlay.querySelector('[data-act=s]').onclick = async () => {
+      const data = readForm(overlay);
+      if (!data.fk_client) return toast('Selectionnez un client dans la liste (tapez son nom ou son code).', 'error');
       try {
-        const r = await POST('/api/returns', readForm(overlay));
+        const r = await POST('/api/returns', data);
         toast(`Retour ${r.ref} cree.`);
         close();
         ctx.navigate('returns/' + r.id);
@@ -112,12 +113,19 @@ export async function viewReturn(el, params, ctx) {
         <div class="card-body">
           <div class="detail-grid">
             <div class="item"><b>Client</b><a href="#/tiers/${r.fk_client}">${esc(r.client_name)}</a></div>
+            <div class="item"><b>Taux de retour (client, ${new Date().getFullYear()})</b>
+              <span class="badge ${r.client_taux_retour > 30 ? 'red' : r.client_taux_retour > 15 ? 'orange' : 'green'}">${r.client_taux_retour} %</span></div>
             <div class="item"><b>Delai de retour</b>${r.delai_retour_mois} mois</div>
             <div class="item"><b>Colis recus</b>${num(r.nb_colis)}</div>
             <div class="item"><b>Articles bipes</b>${num(r.nb_scanned)}</div>
             <div class="item"><b>Total accepte HT</b>${eur(r.accepted_ht)}</div>
             <div class="item"><b>${scanning ? 'Frais estimes' : 'Frais appliques'}</b>${eur(r.estimated_fees)}</div>
             ${r.objet ? `<div class="item"><b>Objet</b>${esc(r.objet)}</div>` : ''}
+          </div>
+          <div class="client-notes">
+            <div class="client-notes-head"><b>Notes client</b>
+              <button class="btn sm ghost" id="rnotes">${icon('edit', 12)} Modifier</button></div>
+            <p>${r.client_notes ? esc(r.client_notes) : '<i>Aucune note</i>'}</p>
           </div>
         </div>
       </div>
@@ -179,6 +187,22 @@ export async function viewReturn(el, params, ctx) {
       });
       scanForm.querySelector('[name=isbn]').focus();
     }
+
+    on('#rnotes', () => {
+      const { overlay, close } = modal({
+        title: 'Notes — ' + r.client_name,
+        body: field('Notes', `<textarea class="input" name="notes" rows="5">${esc(r.client_notes || '')}</textarea>`, 'wide'),
+        footer: `<button class="btn" data-act="c">Annuler</button><button class="btn primary" data-act="s">Enregistrer</button>`
+      });
+      overlay.querySelector('[data-act=c]').onclick = close;
+      overlay.querySelector('[data-act=s]').onclick = async () => {
+        try {
+          await PUT('/api/thirdparties/' + r.fk_client, { notes: readForm(overlay).notes });
+          toast('Notes du client mises a jour.');
+          close(); render();
+        } catch (e) { toastErr(e); }
+      };
+    });
 
     on('#redit', () => {
       const { overlay, close } = modal({

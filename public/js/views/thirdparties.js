@@ -12,6 +12,8 @@ function tierFormModal(type, existing, onSaved) {
     wide: true,
     body: `<div class="form-grid">
       ${field('Nom *', input('name', t.name || '', 'required'), 'wide')}
+      ${field(existing ? 'Code client' : 'Code client (vide = genere automatiquement)',
+        input('code', t.code || '', `placeholder="${existing ? '' : 'Ex : MOLLAT-BX (personnalise ou laisser vide)'}"`))}
       ${field('Contact', input('contact_name', t.contact_name || ''))}
       ${field('Email', input('email', t.email || '', 'type="email"'))}
       ${field('Telephone', input('phone', t.phone || ''))}
